@@ -34,9 +34,11 @@ Text condition that defines the generation direction.
 
 ## Human Layer
 
-Independent drawing layer controlled by the user. It is not the final image. It is an intervention signal.
+Independent drawing layer controlled by the user. It is not the final image. It is a positive intervention signal or guiding condition.
 
 Generated Image updates, Noise Brush, and Auto Mode must not modify Human Layer.
+
+Noise Brush does not mean that Human Layer is applied to the masked region.
 
 ## Generated Image
 
@@ -46,13 +48,28 @@ Step, Auto, and Finish update Generated Image.
 
 ## Noise Brush
 
-Brush used on Generated Image to mark a region for runtime intervention. It is not a normal eraser.
+Brush used on Generated Image to mark a region whose **current local solution is rejected**.
+
+It is not:
+
+- a normal eraser
+- a direct Human Layer apply tool
+
+Its role is to increase uncertainty in that region so future runtime updates move away from the current local interpretation.
 
 ## noiseMask
 
-Mask created by Noise Brush. It tells the next DiffusionIntervention which region should be reconsidered.
+Mask created by Noise Brush.
 
-In a real latent runtime, the mask may be resized to latent resolution and used for local noise injection.
+Semantic meaning:
+
+```text
+the current output in this region is not acceptable
+```
+
+The runtime uses this mask to increase local uncertainty and search for an alternative local solution.
+
+In a real latent runtime, the mask may be resized to latent resolution and used for local uncertainty or noise injection.
 
 ## Noise Strength
 
