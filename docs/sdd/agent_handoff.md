@@ -27,8 +27,9 @@ Prompt input
 → runtime session creation
 → Human Layer drawing
 → Generated Image preview update
-→ Noise Brush mask
-→ stateful runtime intervention
+→ Noise Brush marks rejected local solution
+→ stateful runtime increases local uncertainty
+→ runtime explores an alternative local solution
 → Auto loop
 → Snapshot save
 → Snapshot restore
@@ -49,6 +50,9 @@ TinySD integration comes after Mock Stateful Runtime works.
 - Generated Image updates do not change Human Layer.
 - Noise Brush applies to Generated Image only.
 - Noise Brush creates an intervention mask, not an erase operation.
+- Noise Brush is a "not this local solution" intervention.
+- Do not implement Noise Brush as local Human Layer application.
+- Prompt, Human Layer, and surrounding state guide the alternative solution after noise intervention.
 - Auto Mode can be paused.
 - Runtime state is kept across normal Explore updates.
 - Snapshot is the base for Restore and Finish.
