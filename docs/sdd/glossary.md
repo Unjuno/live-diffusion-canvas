@@ -1,4 +1,4 @@
-# Glossary v0.2
+# Glossary v0.3
 
 ## Live Diffusion Canvas
 
@@ -20,7 +20,7 @@ May include sessionId, prompt, prompt embedding, latent, timestep, scheduler sta
 
 Human or UI input applied to a runtime state.
 
-May include prompt changes, Human Layer, noiseMask, brushNoiseStrength, stepsToAdvance, and mode.
+May include prompt changes, Human Layer, global exploration noise, momentary Noise Brush state, activeNoiseMask, localRejectionStrength, stepsToAdvance, and phase.
 
 ## DiffusionRuntimeResponse
 
@@ -31,6 +31,8 @@ Contains requestId, sessionId, previewImage, seed, optional timestep, and latenc
 ## Prompt
 
 Text condition that defines the generation direction.
+
+Prompt changes do not automatically destroy the current runtime session.
 
 ## Human Layer
 
@@ -46,36 +48,61 @@ Preview image decoded or simulated from the current runtime state.
 
 Step, Auto, and Finish update Generated Image.
 
+## Global Exploration Noise
+
+Low-strength uncertainty injected into the runtime state during Explore Mode to keep the generation process moving.
+
+It is controlled by `globalExplorationNoiseStrength`.
+
 ## Noise Brush
 
-Brush used on Generated Image to mark a region whose **current local solution is rejected**.
+Momentary brush used on Generated Image to mark a region whose **current local solution is rejected**.
+
+It applies only while the user is actively pressing or dragging.
 
 It is not:
 
 - a normal eraser
 - a direct Human Layer apply tool
+- a persistent mask by default
 
-Its role is to increase uncertainty in that region so future runtime updates move away from the current local interpretation.
+Its role is to increase uncertainty in that region during active brushing so future runtime updates move away from the current local interpretation.
 
-## noiseMask
+## noiseBrushActive
 
-Mask created by Noise Brush.
+Boolean state indicating whether the user is currently pressing or dragging the Noise Brush.
+
+When false, local rejection boost must not be applied.
+
+## activeNoiseMask
+
+Current mask produced while Noise Brush is active.
 
 Semantic meaning:
 
 ```text
-the current output in this region is not acceptable
+the current output in this active brushed region is not acceptable
 ```
 
 The runtime uses this mask to increase local uncertainty and search for an alternative local solution.
 
 In a real latent runtime, the mask may be resized to latent resolution and used for local uncertainty or noise injection.
 
-## Noise Strength
+`activeNoiseMask` must be cleared on pointerup, touchend, or cancel.
 
-Single v0.1 value that controls the strength of reintroducing uncertainty in the noiseMask region.
+## lastNoiseMask
 
-v0.1 does not define a separate global denoise strength.
+Optional metadata representing the most recent Noise Brush stroke.
+
+It may be stored for debug, history, or Snapshot metadata.
+
+It is not active intervention state and must not be restored as active rejection input.
+
+## Local Rejection Strength
+
+Single v0.1 value that controls the strength of reintroducing uncertainty in the activeNoiseMask region while Noise Brush is active.
+
+It is controlled by `localRejectionStrength`.
 
 ## Snapshot
 
@@ -85,19 +112,27 @@ Snapshot must store image and settings. It may also reference runtime state when
 
 Snapshot may include `parentId`, but v0.1 does not require Branch Tree UI.
 
+Snapshot may include `lastNoiseMaskDataUrl` as metadata, but Restore must not reactivate it.
+
 ## Restore
 
 Operation that loads a saved Snapshot back into current state.
 
 If runtime state is available, Restore may recover it. Otherwise it may use image Snapshot pseudo resume.
 
+Restore must not reactivate lastNoiseMask as active rejection input.
+
 ## Finish
 
 Operation that starts from a selected Snapshot and runs a stronger finishing update.
 
+Starting Finish should stop Auto Mode.
+
 ## Explore Mode
 
 Mode for finding promising intermediate structure.
+
+Explore Mode uses a rolling intervention loop and low global exploration noise.
 
 ## Finish Mode
 
@@ -113,9 +148,34 @@ Runtime updates are attempted repeatedly at a configured interval.
 
 If the previous request is still running, the implementation may skip or wait.
 
+Auto Mode should behave as a rolling intervention loop, not only a forward-to-final-image process.
+
 ## Pause Mode
 
 Stops Auto Mode while keeping UI interaction available.
+
+## controlMode
+
+UI control mode.
+
+Allowed values:
+
+```text
+step
+auto
+pause
+```
+
+## generationPhase
+
+Runtime phase.
+
+Allowed values:
+
+```text
+explore
+finish
+```
 
 ## selectedBackend
 
@@ -160,7 +220,7 @@ It should simulate session state rather than behave like a purely stateless fina
 
 Preferred first real backend candidate for v0.1 if environment permits.
 
-It should maintain latent state and timestep where feasible, apply noiseMask as local latent intervention, advance a few steps, and decode preview.
+It should maintain latent state and timestep where feasible, apply global exploration noise, apply activeNoiseMask only while Noise Brush is active, advance a few steps, and decode preview.
 
 ## requestId
 
