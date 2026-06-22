@@ -29,7 +29,9 @@ Read in this order:
 - Start with Mock Stateful Runtime before a real model runtime.
 - Keep Human Layer separate from Generated Image.
 - Apply Noise Brush to Generated Image only.
-- Treat Noise Brush as state intervention, not erase.
+- Treat Noise Brush as rejection of the current local solution.
+- Do not interpret Noise Brush as applying Human Layer to the masked region.
+- Use Prompt, Human Layer, and surrounding runtime state as conditions for alternative local solution search after noise intervention.
 - Keep Auto Mode stoppable.
 - Keep Snapshot restore and Finish from Snapshot working.
 - Do not make normal Explore updates always restart from blank state.
