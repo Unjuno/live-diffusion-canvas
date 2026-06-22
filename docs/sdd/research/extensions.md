@@ -35,7 +35,7 @@ Future extensions should be classified by the kind of state they intervene in.
 | Axis | Intervention target | Example technologies |
 |---|---|---|
 | Latent intervention | latent state, timestep, scheduler | TinySD, SD1.5, SDXL |
-| Mask intervention | masked latent/image region | SDEdit, RePaint, inpainting |
+| Mask intervention | rejected masked latent/image region | SDEdit, RePaint, inpainting |
 | Conditioning intervention | external spatial condition | ControlNet, T2I-Adapter |
 | Reference intervention | image/reference embedding | IP-Adapter, snapshot reference |
 | Scheduler/runtime intervention | step schedule, consistency path | LCM, SDXL Turbo |
@@ -85,18 +85,26 @@ future backend plugin
 
 ## 4. Mask intervention
 
+Mask intervention in this project should be understood as:
+
+- rejection of the current local solution
+- increase of local uncertainty
+- search for an alternative local interpretation
+
+It should not be framed as "apply Human Layer inside the mask".
+
 ### 4.1 SDEdit-style local re-diffusion
 
 Use the current state, inject noise, then denoise back toward the prompt.
 
-This is a direct formalization of Noise Brush.
+This is a direct formalization of Noise Brush only when Noise Brush is interpreted as rejection of the current local solution.
 
 Potential mapping:
 
 ```text
-noiseMask = local intervention region
+noiseMask = rejected local solution region
 noiseStrength = amount of uncertainty injection
-Prompt = denoise direction
+Prompt / Human Layer / surrounding state = conditions for alternative search
 ```
 
 Scope:
@@ -114,11 +122,13 @@ Reference:
 
 Use a mask to preserve known regions and regenerate unknown regions.
 
+In this project, the masked region means "the current local solution is rejected," not "put Human Layer here."
+
 Potential mapping:
 
 ```text
-unmasked region = preserved state
-masked region = active uncertainty region
+unmasked region = preserved surrounding state
+masked region = rejected local solution / active uncertainty region
 ```
 
 Scope:
@@ -136,7 +146,7 @@ Reference:
 
 Suggest the mask from semantic or prompt difference.
 
-This extends manual Noise Brush into assisted Noise Brush.
+This extends manual Noise Brush into assisted rejection-mask proposal.
 
 Scope:
 
@@ -336,14 +346,14 @@ Keep current SDD scope, but use stateful runtime terminology.
 Mock Stateful Runtime
 TinySD Stateful Latent Runtime if feasible
 Human Layer
-Noise Brush
+Noise Brush as rejected local solution marker
 Snapshot
 Finish from Snapshot
 ```
 
 ### v0.2
 
-Strengthen Noise Brush as state intervention.
+Strengthen Noise Brush as rejected-state intervention.
 
 ```text
 SDEdit-style local re-diffusion
@@ -400,4 +410,5 @@ Important nuance:
 ```text
 TinySD Stateful Latent Runtime is allowed as the first real v0.1 backend.
 LCM / StreamDiffusion are future optimizations, not prerequisites for real-time-ish interaction.
+Noise Brush is a rejection mask, not a Human Layer apply mask.
 ```
