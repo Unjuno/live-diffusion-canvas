@@ -1,4 +1,4 @@
-# Acceptance Criteria v0.1
+# Acceptance Criteria v0.2
 
 v0.1 is complete only when the following observable criteria pass.
 
@@ -6,11 +6,11 @@ v0.1 is complete only when the following observable criteria pass.
 
 1. User can enter a Prompt.
 2. User can select `selectedBackend` and `selectedModel`.
-3. User can run one Step update.
+3. User can run one Step runtime update.
 4. User can draw on Human Layer.
 5. Human Layer is stored separately from Generated Image.
 6. User can paint a Noise Brush area on Generated Image.
-7. The next GenerationRequest includes `noiseMask` when a mask exists.
+7. The next DiffusionIntervention includes `noiseMask` when a mask exists.
 8. User can start Auto Mode.
 9. User can Pause Auto Mode.
 10. User can save a Snapshot.
@@ -20,6 +20,7 @@ v0.1 is complete only when the following observable criteria pass.
 14. The UI remains usable after a generation error.
 15. Generated Image updates do not change Human Layer.
 16. Old responses cannot overwrite newer Generated Image state.
+17. Normal Explore updates do not always restart from blank state.
 
 ## 2. UI criteria
 
@@ -47,7 +48,25 @@ The user can change:
 - Update Interval
 - Brush Size
 
-## 3. Human Layer criteria
+## 3. Runtime criteria
+
+### AC-RUNTIME-001: Session
+
+The runtime creates or simulates a session identified by sessionId.
+
+### AC-RUNTIME-002: Stateful update
+
+Step and Auto call a runtime update against existing session state when session state exists.
+
+### AC-RUNTIME-003: Mock stateful behavior
+
+Mock runtime visibly or inspectably changes state across updates. It must not behave as a pure stateless final-image generator.
+
+### AC-RUNTIME-004: TinySD positioning
+
+TinySD is treated as the first real stateful latent runtime candidate. It is not treated only as a distant future extension.
+
+## 4. Human Layer criteria
 
 ### AC-HL-001: Drawing
 
@@ -61,11 +80,11 @@ Generated Image updates do not clear or change Human Layer.
 
 Clear Human Layer clears only Human Layer. Generated Image remains.
 
-## 4. Generation criteria
+## 5. Generation criteria
 
 ### AC-GEN-001: Step
 
-When Prompt exists and Step is pressed, exactly one GenerationRequest is sent and Generated Image updates.
+When Prompt exists and Step is pressed, exactly one runtime update is attempted and Generated Image preview updates on success.
 
 ### AC-GEN-002: Status
 
@@ -73,17 +92,17 @@ While a request is running, generationStatus is `generating` or equivalent.
 
 ### AC-GEN-003: Error
 
-When backend fails, generationStatus becomes `error`, errorMessage is visible, and the app remains usable.
+When runtime fails, generationStatus becomes `error`, errorMessage is visible, and the app remains usable.
 
-### AC-GEN-004: Current image continuity
+### AC-GEN-004: Current state continuity
 
-When Generated Image exists, Step and Auto use it as base image. The app must not always recreate from blank state.
+When runtime state exists, Step and Auto use it as the base. The app must not always recreate from blank state.
 
 ### AC-GEN-005: requestId
 
 Every request has a requestId, and every response includes the same requestId.
 
-## 5. Noise Brush criteria
+## 6. Noise Brush criteria
 
 ### AC-NB-001: Mask drawing
 
@@ -93,9 +112,9 @@ Painting on Generated Image creates or updates noiseMask.
 
 Brush Size changes the painted mask size.
 
-### AC-NB-003: Request inclusion
+### AC-NB-003: Intervention inclusion
 
-When noiseMask exists, Step and Auto include it in GenerationRequest.
+When noiseMask exists, Step and Auto include it in DiffusionIntervention or the compatibility GenerationRequest.
 
 ### AC-NB-004: Human Layer unchanged
 
@@ -103,17 +122,17 @@ Noise Brush does not modify Human Layer.
 
 ### AC-NB-005: Noise Strength meaning
 
-Noise Strength is interpreted as the strength of reinterpreting the noiseMask region. v0.1 does not define a second global noise strength.
+Noise Strength is interpreted as the strength of reintroducing uncertainty in the noiseMask region. v0.1 does not define a second global noise strength.
 
-## 6. Auto Loop criteria
+## 7. Auto Loop criteria
 
 ### AC-LOOP-001: Auto start
 
-Auto Mode attempts generation updates every updateIntervalMs.
+Auto Mode attempts runtime updates every updateIntervalMs.
 
 ### AC-LOOP-002: Pause
 
-Pause stops new generation requests.
+Pause stops new runtime requests.
 
 ### AC-LOOP-003: UI remains usable
 
@@ -121,11 +140,11 @@ During Auto Mode, the user can still draw Human Layer, paint Noise Brush, save S
 
 ### AC-LOOP-004: stale response protection
 
-If an old response returns late, it must not overwrite newer Generated Image state.
+If an old response returns late, it must not overwrite newer Generated Image state or runtime state.
 
 This can be implemented with requestId checking or single-flight request control.
 
-## 7. Snapshot criteria
+## 8. Snapshot criteria
 
 ### AC-SNAP-001: Save
 
@@ -155,6 +174,10 @@ If noiseMask exists, Snapshot stores noiseMaskDataUrl.
 
 Restore Snapshot restores Generated Image and main generation settings.
 
+If runtime state is available, Restore may restore runtime state.
+
+If runtime state is not available, Restore may use image Snapshot pseudo resume.
+
 ### AC-SNAP-004: Original retained
 
 Restore and Finish do not delete the original Snapshot.
@@ -163,7 +186,7 @@ Restore and Finish do not delete the original Snapshot.
 
 v0.1 does not require Branch Tree UI. parentId may be stored for future use only.
 
-## 8. Finish criteria
+## 9. Finish criteria
 
 ### AC-FIN-001: Select
 
@@ -171,7 +194,7 @@ Clicking a Snapshot sets selectedSnapshotId.
 
 ### AC-FIN-002: Finish request
 
-Finish from Snapshot uses selected Snapshot generatedImageDataUrl as base image.
+Finish from Snapshot uses selected Snapshot generatedImageDataUrl or saved runtime state as base.
 
 ### AC-FIN-003: Finish settings
 
@@ -187,17 +210,18 @@ cfg: 3.0-6.0
 
 Finish success updates Generated Image and can be saved as a new Snapshot.
 
-## 9. Mock backend criteria
+## 10. Mock runtime criteria
 
 ### AC-MOCK-001: Works without real model
 
-The app supports Step, Auto, Snapshot, Restore, and Finish with Mock backend only.
+The app supports Step, Auto, Snapshot, Restore, and Finish with Mock Stateful Runtime only.
 
 ### AC-MOCK-002: Inspectable request
 
-Mock backend exposes or logs:
+Mock runtime exposes or logs:
 
 - requestId
+- sessionId
 - prompt
 - selectedBackend
 - selectedModel
@@ -209,7 +233,7 @@ Mock backend exposes or logs:
 - noiseMask presence
 - humanLayer presence
 
-## 10. Minimal demo
+## 11. Minimal demo
 
 ```text
 Open app
@@ -224,7 +248,7 @@ Open app
 → Finish from Snapshot
 ```
 
-## 11. Failure conditions
+## 12. Failure conditions
 
 v0.1 is not complete if:
 
@@ -232,8 +256,9 @@ v0.1 is not complete if:
 - Auto cannot be paused.
 - Snapshot cannot be restored.
 - Noise Brush changes Human Layer.
-- UI becomes unusable after backend error.
-- Generated Image is always recreated from scratch without current-image continuity.
+- UI becomes unusable after runtime error.
+- Generated Image is always recreated from blank state without current-state continuity.
 - old responses can overwrite newer state.
 - Model and Backend selection are ambiguous in state.
 - Noise Strength has two conflicting meanings.
+- the runtime is specified only as a final-image generator.
