@@ -21,6 +21,7 @@ v0.1 is complete only when the following observable criteria pass.
 15. Generated Image updates do not change Human Layer.
 16. Old responses cannot overwrite newer Generated Image state.
 17. Normal Explore updates do not always restart from blank state.
+18. Noise Brush is implemented as local rejection / uncertainty boost, not as erase or local Human Layer application.
 
 ## 2. UI criteria
 
@@ -122,7 +123,20 @@ Noise Brush does not modify Human Layer.
 
 ### AC-NB-005: Noise Strength meaning
 
-Noise Strength is interpreted as the strength of reintroducing uncertainty in the noiseMask region. v0.1 does not define a second global noise strength.
+Noise Strength is interpreted as the strength of reintroducing uncertainty in the noiseMask region.
+
+### AC-NB-006: Semantic meaning
+
+Noise Brush means that the current local solution in the masked region is rejected by the user.
+
+It must not be implemented as:
+
+- a normal erase operation
+- a direct Human Layer apply operation
+
+### AC-NB-007: Alternative search behavior
+
+After a noiseMask intervention, future updates should attempt to move the masked region away from the previous local interpretation while remaining conditioned by Prompt, Human Layer, and surrounding runtime state.
 
 ## 7. Auto Loop criteria
 
@@ -242,8 +256,9 @@ Open app
 → draw on Human Layer
 → Auto
 → paint Noise Brush
+→ reject current local solution in painted region
+→ continue generation toward alternative local solution
 → Save Snapshot
-→ continue generation
 → Restore Snapshot
 → Finish from Snapshot
 ```
@@ -256,6 +271,8 @@ v0.1 is not complete if:
 - Auto cannot be paused.
 - Snapshot cannot be restored.
 - Noise Brush changes Human Layer.
+- Noise Brush is implemented as a normal eraser.
+- Noise Brush is implemented as direct local Human Layer application.
 - UI becomes unusable after runtime error.
 - Generated Image is always recreated from blank state without current-state continuity.
 - old responses can overwrite newer state.
