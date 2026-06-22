@@ -1,6 +1,6 @@
-# Stateful Diffusion Runtime v0.1
+# Stateful Diffusion Runtime v0.2
 
-This document corrects the backend abstraction for Live Diffusion Canvas.
+This document defines the backend abstraction for Live Diffusion Canvas.
 
 The core backend is not merely an image-in / image-out generator. The intended abstraction is a runtime that can hold diffusion process state, accept human interventions, advance a small number of diffusion steps, and return a preview.
 
@@ -10,7 +10,9 @@ Live Diffusion Canvas should be designed around this loop:
 
 ```text
 hold diffusion state
-→ receive Human Layer / Noise Brush / Snapshot intervention
+→ inject low global exploration noise during Explore Mode
+→ receive Prompt / Human Layer conditions
+→ optionally receive momentary Noise Brush rejection input while the brush is active
 → modify diffusion state or conditioning
 → advance a few steps
 → decode preview
@@ -30,6 +32,7 @@ Purpose:
 - validate UI and state transitions
 - simulate requestId and session state
 - support Snapshot, Restore, Finish, and error handling without a real model
+- simulate global exploration noise and momentary local rejection input
 
 This runtime is required for v0.1.
 
@@ -39,7 +42,8 @@ Purpose:
 
 - preferred first real backend candidate
 - maintain latent state and timestep
-- apply noiseMask to latent regions
+- apply low global exploration noise in Explore Mode
+- apply activeNoiseMask to latent regions only while Noise Brush is active
 - advance 1 to 3 denoise steps per update
 - decode preview image when needed
 
@@ -122,21 +126,26 @@ type DiffusionIntervention = {
 
   prompt?: string;
   humanLayer?: string;
-  noiseMask?: string;
 
-  brushNoiseStrength: number;
+  globalExplorationNoiseStrength: number;
+
+  noiseBrushActive: boolean;
+  activeNoiseMask?: string;
+  localRejectionStrength: number;
+
   stepsToAdvance: number;
-
-  mode: "explore" | "finish";
+  phase: "explore" | "finish";
 };
 ```
 
 Interpretation notes:
 
 - `humanLayer` is a positive intervention signal or guiding condition.
-- `noiseMask` is a negative intervention signal meaning: "not this current local solution".
-- The runtime must not interpret `noiseMask` as "apply Human Layer only in this region".
-- Prompt, Human Layer, and surrounding runtime state guide the alternative search after noise intervention.
+- `globalExplorationNoiseStrength` is the low ambient uncertainty used to keep Explore Mode moving.
+- `activeNoiseMask` is a negative intervention signal meaning: "not this current local solution".
+- `activeNoiseMask` is only valid while `noiseBrushActive` is true.
+- The runtime must not interpret `activeNoiseMask` as "apply Human Layer only in this region".
+- Prompt, Human Layer, and surrounding runtime state guide the alternative search after local rejection input.
 
 ## 5. Runtime response
 
@@ -152,39 +161,69 @@ type DiffusionRuntimeResponse = {
 };
 ```
 
-## 6. Noise Brush as state intervention
+## 6. Explore loop behavior
 
-Noise Brush should be interpreted as a **rejected local solution marker**.
+Explore Mode is a rolling intervention loop.
+
+It is not a forward-only process whose only goal is final timestep completion.
+
+Each Explore update should conceptually do this:
+
+```text
+current runtime state
+→ apply low global exploration noise
+→ apply Prompt and Human Layer conditions
+→ if noiseBrushActive, apply local rejection boost in activeNoiseMask region
+→ denoise / update 1 to 3 steps
+→ decode preview
+→ keep updated runtime state
+```
+
+`globalExplorationNoiseStrength` should be low by default.
+
+`localRejectionStrength` should be stronger than the global value, but only applied while the user is actively pressing or dragging the Noise Brush.
+
+## 7. Noise Brush as momentary local rejection input
+
+Noise Brush should be interpreted as a **momentary rejected local solution marker**.
 
 It is not:
 
 - a normal eraser
 - a direct Human Layer apply brush
+- a persistent mask by default
 
 Its meaning is:
 
 ```text
 the current local solution in this region is rejected by the user
-→ increase uncertainty in that region
+→ while the brush is active, increase uncertainty in that region
 → move future updates away from the current local interpretation
+→ when the user releases the brush, stop local rejection boost
 ```
 
 Preferred real-backend behavior:
 
 ```text
-noiseMask
-→ resize to latent resolution
-→ inject additional uncertainty/noise into the masked latent region
-→ denoise 1 to 3 steps
-→ decode preview
-→ keep updated latent/runtime state
+if noiseBrushActive and activeNoiseMask exists:
+  activeNoiseMask
+  → resize to latent resolution
+  → inject additional uncertainty/noise into the masked latent region
+else:
+  do not apply local rejection boost
+
+always in Explore Mode:
+  apply low global exploration noise
+  denoise 1 to 3 steps
+  decode preview
+  keep updated latent/runtime state
 ```
 
 Prompt, Human Layer, and surrounding runtime state then act as conditions for selecting a new local interpretation.
 
 This differs from image-to-image regeneration. The runtime should avoid restarting from blank state during normal Explore updates.
 
-## 7. Human Layer as intervention
+## 8. Human Layer as intervention
 
 v0.1 keeps Human Layer as an independent layer and passes it to the backend.
 
@@ -192,15 +231,15 @@ Possible backend interpretations:
 
 ```text
 mock: render/debug overlay only
-TinySD stateful: optional weak conditioning or ignored initially
+TinySD stateful: optional weak conditioning or explicit no-op with UI/debug disclosure
 Control runtime: Scribble / Lineart / adapter condition
 ```
 
 v0.1 does not require Human Layer to become ControlNet conditioning, but the runtime abstraction must not block that future path.
 
-Noise Brush does not mean "apply Human Layer here". Noise Brush only means that the current local solution is rejected and should be made uncertain again.
+Noise Brush does not mean "apply Human Layer here". Noise Brush only means that the current local solution is rejected and should be made uncertain again while the brush is active.
 
-## 8. Snapshot and runtime state
+## 9. Snapshot and runtime state
 
 v0.1 Snapshot still stores image and settings for portability.
 
@@ -218,13 +257,15 @@ For v0.1:
 
 - image Snapshot is required
 - runtime-state Snapshot is optional
+- lastNoiseMask metadata is optional
+- activeNoiseMask must not be restored as active rejection input by default
 - if runtime-state Snapshot is unavailable, Restore may use pseudo resume
 
-## 9. GenerationBackend compatibility
+## 10. GenerationBackend compatibility
 
 `GenerationBackend` remains acceptable as a thin API name, but its intended semantics are stateful.
 
-The implementation may keep these compatibility types:
+The implementation may keep compatibility aliases, but the semantic fields are:
 
 ```ts
 type GenerationRequest = DiffusionIntervention & {
@@ -242,7 +283,7 @@ The important constraint is behavioral:
 normal Explore updates should advance existing diffusion/session state, not always regenerate from blank state.
 ```
 
-## 10. v0.1 implementation rule
+## 11. v0.1 implementation rule
 
 v0.1 implementation order remains:
 
