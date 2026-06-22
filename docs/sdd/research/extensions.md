@@ -1,10 +1,10 @@
-# Extension Research v0.2
+# Extension Research v0.3
 
 This document records future extension candidates for Live Diffusion Canvas.
 
 The correction in this version is important: extensions are not primarily model-name upgrades. They are different ways to intervene in diffusion runtime state.
 
-These items are research notes unless explicitly promoted into `spec.md`, `architecture.md`, `tasks.md`, `acceptance.md`, and `decisions.md`.
+These items are research notes unless explicitly promoted into `spec.md`, `runtime.md`, `architecture.md`, `tasks.md`, `acceptance.md`, and `decisions.md`.
 
 ## 1. Correct abstraction
 
@@ -20,7 +20,9 @@ The intended abstraction is:
 
 ```text
 hold diffusion runtime state
+→ apply low global exploration noise
 → apply human intervention
+→ optionally apply momentary local rejection while Noise Brush is active
 → advance a few steps
 → return preview
 → keep state alive
@@ -35,7 +37,7 @@ Future extensions should be classified by the kind of state they intervene in.
 | Axis | Intervention target | Example technologies |
 |---|---|---|
 | Latent intervention | latent state, timestep, scheduler | TinySD, SD1.5, SDXL |
-| Mask intervention | rejected masked latent/image region | SDEdit, RePaint, inpainting |
+| Mask intervention | active rejected masked latent/image region | SDEdit, RePaint, inpainting |
 | Conditioning intervention | external spatial condition | ControlNet, T2I-Adapter |
 | Reference intervention | image/reference embedding | IP-Adapter, snapshot reference |
 | Scheduler/runtime intervention | step schedule, consistency path | LCM, SDXL Turbo |
@@ -52,8 +54,10 @@ Potential mapping:
 ```text
 DiffusionRuntimeState.latent
 + DiffusionRuntimeState.timestep
-+ noiseMask
-→ local latent noise injection
++ globalExplorationNoiseStrength
++ activeNoiseMask only while Noise Brush is active
+→ low ambient latent noise
+→ optional local rejection noise injection
 → 1 to 3 denoise steps
 → preview decode
 ```
@@ -88,22 +92,25 @@ future backend plugin
 Mask intervention in this project should be understood as:
 
 - rejection of the current local solution
-- increase of local uncertainty
+- temporary increase of local uncertainty while Noise Brush is active
 - search for an alternative local interpretation
 
 It should not be framed as "apply Human Layer inside the mask".
+
+In v0.1, Noise Brush is momentary. Persistent / pinned masks are out of scope.
 
 ### 4.1 SDEdit-style local re-diffusion
 
 Use the current state, inject noise, then denoise back toward the prompt.
 
-This is a direct formalization of Noise Brush only when Noise Brush is interpreted as rejection of the current local solution.
+This is a direct formalization of Noise Brush only when Noise Brush is interpreted as active rejection of the current local solution.
 
 Potential mapping:
 
 ```text
-noiseMask = rejected local solution region
-noiseStrength = amount of uncertainty injection
+activeNoiseMask = active rejected local solution region
+localRejectionStrength = amount of local uncertainty injection
+globalExplorationNoiseStrength = low ambient exploration noise
 Prompt / Human Layer / surrounding state = conditions for alternative search
 ```
 
@@ -128,7 +135,7 @@ Potential mapping:
 
 ```text
 unmasked region = preserved surrounding state
-masked region = rejected local solution / active uncertainty region
+masked region = active rejection / local uncertainty region
 ```
 
 Scope:
@@ -345,15 +352,16 @@ Keep current SDD scope, but use stateful runtime terminology.
 ```text
 Mock Stateful Runtime
 TinySD Stateful Latent Runtime if feasible
+Global Exploration Noise
+Momentary Noise Brush local rejection
 Human Layer
-Noise Brush as rejected local solution marker
 Snapshot
 Finish from Snapshot
 ```
 
 ### v0.2
 
-Strengthen Noise Brush as rejected-state intervention.
+Strengthen Noise Brush as local rejection intervention.
 
 ```text
 SDEdit-style local re-diffusion
@@ -402,6 +410,7 @@ The following must not be implemented in v0.1 unless the SDD is updated:
 - LCM / LCM-LoRA as required runtime
 - SDXL Turbo
 - StreamDiffusion
+- persistent / pinned rejection masks
 - SDXL Finish backend
 - SD3 / SD3.5 / Flux-class backend
 
@@ -410,5 +419,5 @@ Important nuance:
 ```text
 TinySD Stateful Latent Runtime is allowed as the first real v0.1 backend.
 LCM / StreamDiffusion are future optimizations, not prerequisites for real-time-ish interaction.
-Noise Brush is a rejection mask, not a Human Layer apply mask.
+Noise Brush is a momentary rejection brush, not a persistent mask and not a Human Layer apply mask.
 ```
