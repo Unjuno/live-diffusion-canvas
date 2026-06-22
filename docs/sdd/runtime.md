@@ -131,6 +131,13 @@ type DiffusionIntervention = {
 };
 ```
 
+Interpretation notes:
+
+- `humanLayer` is a positive intervention signal or guiding condition.
+- `noiseMask` is a negative intervention signal meaning: "not this current local solution".
+- The runtime must not interpret `noiseMask` as "apply Human Layer only in this region".
+- Prompt, Human Layer, and surrounding runtime state guide the alternative search after noise intervention.
+
 ## 5. Runtime response
 
 ```ts
@@ -147,18 +154,33 @@ type DiffusionRuntimeResponse = {
 
 ## 6. Noise Brush as state intervention
 
-Noise Brush should be interpreted as local uncertainty injection.
+Noise Brush should be interpreted as a **rejected local solution marker**.
+
+It is not:
+
+- a normal eraser
+- a direct Human Layer apply brush
+
+Its meaning is:
+
+```text
+the current local solution in this region is rejected by the user
+→ increase uncertainty in that region
+→ move future updates away from the current local interpretation
+```
 
 Preferred real-backend behavior:
 
 ```text
 noiseMask
 → resize to latent resolution
-→ mix noise into masked latent region
+→ inject additional uncertainty/noise into the masked latent region
 → denoise 1 to 3 steps
 → decode preview
-→ keep updated latent state
+→ keep updated latent/runtime state
 ```
+
+Prompt, Human Layer, and surrounding runtime state then act as conditions for selecting a new local interpretation.
 
 This differs from image-to-image regeneration. The runtime should avoid restarting from blank state during normal Explore updates.
 
@@ -175,6 +197,8 @@ Control runtime: Scribble / Lineart / adapter condition
 ```
 
 v0.1 does not require Human Layer to become ControlNet conditioning, but the runtime abstraction must not block that future path.
+
+Noise Brush does not mean "apply Human Layer here". Noise Brush only means that the current local solution is rejected and should be made uncertain again.
 
 ## 8. Snapshot and runtime state
 
