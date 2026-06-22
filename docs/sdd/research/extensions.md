@@ -1,60 +1,105 @@
-# Extension Research v0.1
+# Extension Research v0.2
 
 This document records future extension candidates for Live Diffusion Canvas.
 
-These items are research notes only. They are not v0.1 implementation scope.
+The correction in this version is important: extensions are not primarily model-name upgrades. They are different ways to intervene in diffusion runtime state.
 
-## 1. Current v0.1 assumption
+These items are research notes unless explicitly promoted into `spec.md`, `architecture.md`, `tasks.md`, `acceptance.md`, and `decisions.md`.
 
-v0.1 assumes a simple generation backend:
+## 1. Correct abstraction
 
-```text
-mock first
-→ TinySD or simple Stable Diffusion backend later
-```
-
-The current v0.1 scope remains:
+The project should not be framed as:
 
 ```text
-Prompt
-+ Human Layer
-+ Generated Image
-+ Noise Brush
-+ Snapshot
-+ Restore / Finish from Snapshot
+prompt or image input
+→ regenerate image
+→ return final image
 ```
 
-Do not add the extensions below to implementation tasks unless the SDD files are updated first.
+The intended abstraction is:
 
-## 2. Extension taxonomy
+```text
+hold diffusion runtime state
+→ apply human intervention
+→ advance a few steps
+→ return preview
+→ keep state alive
+```
 
-Future extensions are grouped into four tracks.
+This means TinySD is not merely a placeholder model. TinySD can be the first real stateful diffusion runtime if it exposes enough internal state for latent and timestep intervention.
 
-| Track | Purpose | Priority |
+## 2. Intervention axes
+
+Future extensions should be classified by the kind of state they intervene in.
+
+| Axis | Intervention target | Example technologies |
 |---|---|---|
-| Editing / re-diffusion | Make Noise Brush technically stronger | High |
-| Control / conditioning | Make Human Layer influence generation more directly | Medium |
-| Real-time acceleration | Make the loop feel live | High |
-| Quality / model upgrade | Improve final output quality | Medium |
+| Latent intervention | latent state, timestep, scheduler | TinySD, SD1.5, SDXL |
+| Mask intervention | masked latent/image region | SDEdit, RePaint, inpainting |
+| Conditioning intervention | external spatial condition | ControlNet, T2I-Adapter |
+| Reference intervention | image/reference embedding | IP-Adapter, snapshot reference |
+| Scheduler/runtime intervention | step schedule, consistency path | LCM, SDXL Turbo |
+| Streaming intervention | persistent interactive pipeline | StreamDiffusion |
 
-## 3. Editing / re-diffusion extensions
+## 3. Latent intervention
 
-### 3.1 SDEdit-style local re-diffusion
+### 3.1 TinySD Stateful Latent Runtime
 
-Use the current image as input, add noise, then denoise back toward the prompt.
-
-This is the closest conceptual match for Noise Brush.
+TinySD should be treated as the preferred first real backend candidate, not as a distant extension.
 
 Potential mapping:
 
 ```text
-Generated Image = input image
-noiseMask = local region to disturb
-noiseStrength = how strongly to disturb it
-Prompt = direction for denoising
+DiffusionRuntimeState.latent
++ DiffusionRuntimeState.timestep
++ noiseMask
+→ local latent noise injection
+→ 1 to 3 denoise steps
+→ preview decode
 ```
 
-Recommended scope:
+Scope:
+
+```text
+v0.1 preferred real backend if feasible
+```
+
+### 3.2 SD / SDXL Stateful Latent Runtime
+
+The same concept can apply to larger Stable Diffusion variants if the runtime can hold latent state and timestep.
+
+Potential mapping:
+
+```text
+same intervention model
+larger model
+slower Explore loop
+better Finish quality
+```
+
+Scope:
+
+```text
+future backend plugin
+```
+
+## 4. Mask intervention
+
+### 4.1 SDEdit-style local re-diffusion
+
+Use the current state, inject noise, then denoise back toward the prompt.
+
+This is a direct formalization of Noise Brush.
+
+Potential mapping:
+
+```text
+noiseMask = local intervention region
+noiseStrength = amount of uncertainty injection
+Prompt = denoise direction
+```
+
+Scope:
 
 ```text
 v0.2 candidate
@@ -65,18 +110,18 @@ Reference:
 - SDEdit: Guided Image Synthesis and Editing with Stochastic Differential Equations
 - https://arxiv.org/abs/2108.01073
 
-### 3.2 RePaint-style mask inpainting
+### 4.2 RePaint-style masked denoising
 
-Treat Noise Brush as an inpainting mask.
+Use a mask to preserve known regions and regenerate unknown regions.
 
 Potential mapping:
 
 ```text
-unmasked region = preserved Generated Image
-masked region = re-generated target
+unmasked region = preserved state
+masked region = active uncertainty region
 ```
 
-Recommended scope:
+Scope:
 
 ```text
 v0.2 or v0.3 candidate
@@ -87,13 +132,13 @@ Reference:
 - RePaint: Inpainting using Denoising Diffusion Probabilistic Models
 - https://arxiv.org/abs/2201.09865
 
-### 3.3 DiffEdit-style smart mask
+### 4.3 DiffEdit-style smart mask
 
-Use prompt difference or semantic difference to suggest the region that should change.
+Suggest the mask from semantic or prompt difference.
 
-This would turn manual Noise Brush into assisted Noise Brush.
+This extends manual Noise Brush into assisted Noise Brush.
 
-Recommended scope:
+Scope:
 
 ```text
 later than v0.2
@@ -104,23 +149,23 @@ Reference:
 - DiffEdit: Diffusion-based semantic image editing with mask guidance
 - https://arxiv.org/abs/2210.11427
 
-## 4. Control / conditioning extensions
+## 5. Conditioning intervention
 
-### 4.1 ControlNet Scribble / Lineart
+### 5.1 ControlNet Scribble / Lineart
 
-Use Human Layer as a spatial conditioning input.
+Use Human Layer as spatial conditioning.
 
 Potential mapping:
 
 ```text
 Human Layer
 → scribble / lineart condition
-→ ControlNet-conditioned generation
+→ conditioned diffusion state update
 ```
 
-This is a major scope increase because Human Layer changes from stored intervention layer to active conditioning signal.
+This changes Human Layer from independent stored layer into active conditioning input.
 
-Recommended scope:
+Scope:
 
 ```text
 v0.3 candidate
@@ -131,9 +176,9 @@ Reference:
 - Adding Conditional Control to Text-to-Image Diffusion Models
 - https://arxiv.org/abs/2302.05543
 
-### 4.2 T2I-Adapter
+### 5.2 T2I-Adapter
 
-Use lightweight adapters to condition generation with structure, color, or other external signals while keeping the base model mostly fixed.
+Use a lightweight adapter to condition generation with external structure.
 
 Potential mapping:
 
@@ -143,7 +188,7 @@ Human Layer
 → generation control
 ```
 
-Recommended scope:
+Scope:
 
 ```text
 v0.3 or later
@@ -154,7 +199,9 @@ Reference:
 - T2I-Adapter: Learning Adapters to Dig out More Controllable Ability for Text-to-Image Diffusion Models
 - https://arxiv.org/abs/2302.08453
 
-### 4.3 IP-Adapter snapshot reference
+## 6. Reference intervention
+
+### 6.1 IP-Adapter snapshot reference
 
 Use a selected Snapshot as an image prompt or reference.
 
@@ -162,13 +209,13 @@ Potential mapping:
 
 ```text
 selected Snapshot
-→ image prompt / reference
-→ preserve style, structure, or layout during new generation
+→ image reference embedding
+→ preserve style, structure, or layout
 ```
 
-This is highly aligned with the idea that a good intermediate state can become an anchor.
+This matches the idea that a good intermediate state can become an anchor.
 
-Recommended scope:
+Scope:
 
 ```text
 v0.4 candidate
@@ -179,24 +226,18 @@ Reference:
 - IP-Adapter: Text Compatible Image Prompt Adapter for Text-to-Image Diffusion Models
 - https://arxiv.org/abs/2308.06721
 
-## 5. Real-time acceleration extensions
+## 7. Scheduler and runtime intervention
 
-### 5.1 LCM / LCM-LoRA backend
+### 7.1 LCM / LCM-LoRA
 
-Use a low-step latent consistency backend for faster updates.
+Use low-step latent consistency behavior to make state updates faster.
 
-Potential mapping:
+This should be viewed as a runtime optimization for the same intervention loop, not as a separate product concept.
 
-```text
-Explore Mode
-→ low step generation
-→ faster feedback loop
-```
-
-Recommended scope:
+Scope:
 
 ```text
-v0.3 candidate
+v0.3 or later
 ```
 
 Reference:
@@ -204,18 +245,18 @@ Reference:
 - Latent Consistency Models / LCM-LoRA
 - https://arxiv.org/abs/2311.05556
 
-### 5.2 SDXL Turbo / ADD-style backend
+### 7.2 SDXL Turbo / ADD-style backend
 
-Use distilled few-step generation for fast exploration or finish preview.
+Use few-step distilled generation for rapid previews.
 
 Potential mapping:
 
 ```text
-Explore Mode = fast few-step model
-Finish Mode = slower higher-quality model
+Explore Mode = fast few-step runtime
+Finish Mode = slower high-quality runtime
 ```
 
-Recommended scope:
+Scope:
 
 ```text
 v0.4 candidate
@@ -226,19 +267,21 @@ Reference:
 - Adversarial Diffusion Distillation
 - https://arxiv.org/abs/2311.17042
 
-### 5.3 StreamDiffusion-style runtime
+## 8. Streaming intervention
 
-Use a streaming pipeline designed for interactive image generation.
+### 8.1 StreamDiffusion-style runtime
+
+Use a pipeline designed for interactive image generation.
 
 Potential mapping:
 
 ```text
-continuous input updates
-→ streaming generation backend
-→ near-real-time preview
+continuous human input
+→ persistent generation stream
+→ low-latency preview updates
 ```
 
-Recommended scope:
+Scope:
 
 ```text
 v0.5 or later
@@ -249,20 +292,20 @@ Reference:
 - StreamDiffusion: A Pipeline-level Solution for Real-time Interactive Generation
 - https://arxiv.org/abs/2312.12491
 
-## 6. Quality / model upgrade extensions
+## 9. Quality and model upgrades
 
-### 6.1 SDXL Finish backend
+### 9.1 SDXL Finish backend
 
-Use SDXL or another higher-quality model only for Finish Mode.
+Use SDXL or another high-quality model only for Finish Mode.
 
 Potential mapping:
 
 ```text
-Explore Mode = TinySD / mock / fast backend
-Finish Mode = SDXL or higher-quality backend
+Explore Mode = TinySD / fast runtime
+Finish Mode = SDXL / higher-quality runtime
 ```
 
-Recommended scope:
+Scope:
 
 ```text
 v0.4 candidate
@@ -273,25 +316,25 @@ Reference:
 - SDXL: Improving Latent Diffusion Models for High-Resolution Image Synthesis
 - https://arxiv.org/abs/2307.01952
 
-### 6.2 SD3 / SD3.5 / Flux-class backends
+### 9.2 SD3 / SD3.5 / Flux-class backends
 
-Treat future model families as backend plugins, not as v0.1 assumptions.
+Treat future model families as runtime plugins.
 
-Recommended scope:
+Scope:
 
 ```text
 future backend plugin only
 ```
 
-## 7. Recommended roadmap
+## 10. Revised roadmap
 
 ### v0.1
 
-Keep the current SDD scope.
+Keep current SDD scope, but use stateful runtime terminology.
 
 ```text
-Mock backend
-TinySD backend hook
+Mock Stateful Runtime
+TinySD Stateful Latent Runtime if feasible
 Human Layer
 Noise Brush
 Snapshot
@@ -300,7 +343,7 @@ Finish from Snapshot
 
 ### v0.2
 
-Strengthen Noise Brush.
+Strengthen Noise Brush as state intervention.
 
 ```text
 SDEdit-style local re-diffusion
@@ -314,41 +357,47 @@ Make Human Layer an active conditioning signal.
 ```text
 ControlNet Scribble / Lineart
 T2I-Adapter structure control
+LCM-style speedup if needed
 ```
 
 ### v0.4
 
-Use Snapshot as a stronger anchor.
+Use Snapshot as a stronger anchor and improve Finish.
 
 ```text
 IP-Adapter snapshot reference
 SDXL Finish backend
+SDXL Turbo / ADD-style preview
 ```
 
 ### v0.5
 
-Move toward real-time generation.
+Move toward persistent streaming generation.
 
 ```text
-LCM / LCM-LoRA
-SDXL Turbo / ADD-style backend
 StreamDiffusion-style runtime
+more aggressive runtime scheduling
 ```
 
-## 8. Explicit non-scope for v0.1
+## 11. Explicit non-scope for v0.1
 
-The following must not be implemented in v0.1:
+The following must not be implemented in v0.1 unless the SDD is updated:
 
-- SDEdit local re-diffusion
+- SDEdit local re-diffusion as a required feature
 - RePaint mask inpainting
 - DiffEdit smart mask
 - ControlNet
 - T2I-Adapter
 - IP-Adapter
-- LCM / LCM-LoRA
+- LCM / LCM-LoRA as required runtime
 - SDXL Turbo
 - StreamDiffusion
 - SDXL Finish backend
 - SD3 / SD3.5 / Flux-class backend
 
-They may be used only as design references unless the SDD is updated.
+Important nuance:
+
+```text
+TinySD Stateful Latent Runtime is allowed as the first real v0.1 backend.
+LCM / StreamDiffusion are future optimizations, not prerequisites for real-time-ish interaction.
+```
