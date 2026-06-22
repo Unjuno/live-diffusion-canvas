@@ -1,4 +1,4 @@
-# Decisions v0.2
+# Decisions v0.3
 
 ## D-001: This is not a final-image app
 
@@ -70,13 +70,20 @@ Use requestId checking or single-flight control.
 
 This avoids ambiguity between the UI model selector and the actual execution backend.
 
-## D-012: Noise Strength has one meaning in v0.1
+## D-012: Exploration noise and local rejection strength are separate
 
-v0.1 uses one `noiseStrength` value.
+v0.1 separates two strengths:
 
-It controls the strength of reintroducing uncertainty into the `noiseMask` region.
+```text
+globalExplorationNoiseStrength
+localRejectionStrength
+```
 
-A separate global denoise strength may be added in a later version only after a spec update.
+`globalExplorationNoiseStrength` is low ambient uncertainty that keeps Explore Mode moving.
+
+`localRejectionStrength` applies only while Noise Brush is active and controls uncertainty boost in the activeNoiseMask region.
+
+These must not be collapsed into a single ambiguous `noiseStrength` value.
 
 ## D-013: Runtime abstraction is stateful
 
@@ -108,3 +115,38 @@ Noise Brush means that the current local solution is rejected by the user.
 The runtime should increase uncertainty in that region so future updates move away from the current local interpretation and search for an alternative local solution.
 
 Prompt, Human Layer, and surrounding runtime state then act as conditions for that alternative search.
+
+## D-016: Noise Brush is momentary in v0.1
+
+Noise Brush applies only while the user is actively pressing or dragging.
+
+On pointerup, touchend, or cancel:
+
+```text
+noiseBrushActive = false
+activeNoiseMask = null
+```
+
+The local rejection boost must stop after release.
+
+`lastNoiseMask` may remain as debug/history/Snapshot metadata only. It must not be restored as active rejection input.
+
+Persistent / pinned rejection masks are out of scope for v0.1.
+
+## D-017: Explore Mode is a rolling intervention loop
+
+Explore Mode is not merely a forward-to-final-image process.
+
+Each Auto update should apply low global exploration noise, then optional momentary local rejection boost if Noise Brush is active, then advance a few steps and keep runtime state.
+
+## D-018: Prompt changes preserve session by default
+
+Prompt changes during Auto Mode do not destroy the current runtime session.
+
+The next runtime update should use the updated Prompt as a condition.
+
+Only an explicit Reset Session action should create a new runtime session from scratch.
+
+## D-019: Finish stops Auto
+
+Starting Finish from Snapshot should stop Auto Mode and prevent concurrent Auto requests until Finish completes.
