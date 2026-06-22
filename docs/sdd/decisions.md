@@ -98,3 +98,13 @@ streaming intervention
 ```
 
 This keeps ControlNet, IP-Adapter, LCM, StreamDiffusion, and SDXL-class backends aligned with the same product concept instead of treating them as unrelated model swaps.
+
+## D-015: Noise Brush expresses local rejection, not local Human Layer application
+
+Noise Brush does not mean "apply Human Layer here".
+
+Noise Brush means that the current local solution is rejected by the user.
+
+The runtime should increase uncertainty in that region so future updates move away from the current local interpretation and search for an alternative local solution.
+
+Prompt, Human Layer, and surrounding runtime state then act as conditions for that alternative search.
