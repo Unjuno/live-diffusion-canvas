@@ -1,4 +1,4 @@
-# Tasks v0.2
+# Tasks v0.3
 
 Implement in this order. Do not skip ahead to model-quality work before the UI, state, and Mock Stateful Runtime work.
 
@@ -11,7 +11,9 @@ Implement in this order. Do not skip ahead to model-quality work before the UI, 
 - Start with `MockStatefulRuntime` before any real model backend.
 - Keep Human Layer separate from Generated Image.
 - Keep Noise Brush limited to Generated Image.
+- Noise Brush is momentary: it applies only while the user is pressing or dragging.
 - Normal Explore updates must not always regenerate from blank state.
+- Explore Auto loop should include low global exploration noise.
 
 ## Task 0: Project scaffold
 
@@ -64,19 +66,23 @@ Implement `AppState` from `docs/sdd/spec.md`, including:
 - prompt
 - selectedBackend
 - selectedModel
-- mode
+- controlMode
+- generationPhase
 - generationStatus
 - errorMessage
 - steps
 - cfg
-- noiseStrength
+- globalExplorationNoiseStrength
+- localRejectionStrength
 - brushSize
 - updateIntervalMs
 - seed
 - seedLocked
 - humanLayer
 - generatedImage
-- noiseMask
+- noiseBrushActive
+- activeNoiseMask
+- lastNoiseMask
 - runtimeSessionId
 - latestRequestId
 - snapshots
@@ -90,7 +96,7 @@ Done when:
 
 ## Task 3: Human Layer canvas
 
-Purpose: implement the user-controlled intervention layer.
+Purpose: implement the user-controlled positive intervention layer.
 
 Implement:
 
@@ -125,6 +131,7 @@ Done when:
 - A runtime can apply an intervention.
 - requestId and sessionId are part of the flow.
 - The naming does not imply blank-state regeneration.
+- `phase` and `controlMode` are not conflated.
 
 Acceptance: AC-RUNTIME-001, AC-RUNTIME-002.
 
@@ -138,6 +145,8 @@ Implement:
 - sessionId creation.
 - pseudo runtime state update.
 - preview image output.
+- low global exploration noise simulation.
+- momentary local rejection boost simulation.
 - latencyMs output.
 - visible or logged intervention metadata.
 - error simulation path.
@@ -145,8 +154,10 @@ Implement:
 Done when:
 
 - Step can produce a generated placeholder preview.
-- requestId, sessionId, prompt, selectedBackend, selectedModel, seed, steps, cfg, noiseStrength, image presence, noiseMask presence, and humanLayer presence are inspectable.
+- requestId, sessionId, prompt, selectedBackend, selectedModel, seed, steps, cfg, globalExplorationNoiseStrength, localRejectionStrength, noiseBrushActive, activeNoiseMask presence, and humanLayer presence are inspectable.
 - Runtime state visibly changes across updates.
+- Global exploration noise is visible or inspectable across repeated Auto updates.
+- Local rejection boost is visible or inspectable only while Noise Brush is active.
 - Error handling can be tested.
 
 Acceptance: AC-MOCK-001, AC-MOCK-002, AC-RUNTIME-003.
@@ -177,26 +188,30 @@ Done when:
 
 Acceptance: AC-GEN-001, AC-GEN-002, AC-GEN-003, AC-GEN-004, AC-GEN-005.
 
-## Task 7: Noise Brush mask
+## Task 7: Momentary Noise Brush input
 
-Purpose: allow the user to mark regions of Generated Image for runtime intervention.
+Purpose: allow the user to reject a local solution only while actively brushing.
 
 Implement:
 
 - Brush interaction on Generated Image canvas.
 - Brush Size setting.
-- noiseMask state.
-- noiseMask export.
-- Include noiseMask in the next DiffusionIntervention.
+- `noiseBrushActive` state.
+- `activeNoiseMask` state.
+- `lastNoiseMask` metadata.
+- Include `activeNoiseMask` in DiffusionIntervention only when `noiseBrushActive` is true.
+- Clear `activeNoiseMask` on pointerup / touchend / cancel.
 
 Done when:
 
-- User can paint a mask on Generated Image.
+- User can paint a rejection mask on Generated Image.
 - Brush Size changes the painted area size.
-- Step and Auto interventions include noiseMask when present.
+- Step and Auto interventions include activeNoiseMask only while the brush is active.
+- On release, active local rejection stops.
+- lastNoiseMask may remain only as metadata.
 - Human Layer is not changed.
 
-Acceptance: AC-NB-001, AC-NB-002, AC-NB-003, AC-NB-004, AC-NB-005.
+Acceptance: AC-NB-001 through AC-NB-009.
 
 ## Task 8: Step / Auto / Pause loop
 
@@ -206,6 +221,8 @@ Implement:
 
 - Step mode: one runtime update per click.
 - Auto mode: try runtime updates every updateIntervalMs.
+- Auto mode: include globalExplorationNoiseStrength in every Explore update.
+- Auto mode: include localRejectionStrength only while noiseBrushActive is true.
 - Pause mode: stop new requests.
 - In-flight request handling by skip, wait, or single-flight.
 - stale response protection with requestId or equivalent.
@@ -214,11 +231,13 @@ Done when:
 
 - Step updates once.
 - Auto updates repeatedly.
+- Auto updates show or simulate low global exploration movement.
+- Noise Brush affects local region only while active.
 - Pause stops Auto.
 - UI remains usable in Auto.
 - Older responses cannot overwrite newer state.
 
-Acceptance: AC-LOOP-001, AC-LOOP-002, AC-LOOP-003, AC-LOOP-004.
+Acceptance: AC-LOOP-001, AC-LOOP-002, AC-LOOP-003, AC-LOOP-004, AC-LOOP-005.
 
 ## Task 9: Snapshot save / restore
 
@@ -244,10 +263,11 @@ Snapshot must store:
 - seed
 - steps
 - cfg
-- noiseStrength
+- globalExplorationNoiseStrength
+- localRejectionStrength
 - generatedImageDataUrl
 - humanLayerDataUrl when present
-- noiseMaskDataUrl when present
+- lastNoiseMaskDataUrl when present as metadata
 - runtimeStateRef when available
 
 Done when:
@@ -256,9 +276,10 @@ Done when:
 - Restore reloads image and main settings.
 - Restore uses runtime state when available.
 - Restore can fall back to pseudo resume when runtime state is unavailable.
+- Restore does not reactivate lastNoiseMask as active rejection input.
 - Original Snapshot remains.
 
-Acceptance: AC-SNAP-001, AC-SNAP-002, AC-SNAP-003, AC-SNAP-004, AC-SNAP-005.
+Acceptance: AC-SNAP-001, AC-SNAP-002, AC-SNAP-003, AC-SNAP-004, AC-SNAP-005, AC-SNAP-006.
 
 ## Task 10: Finish from Snapshot
 
@@ -268,6 +289,7 @@ Implement:
 
 - Select Snapshot.
 - Finish from Snapshot button.
+- Stop Auto when Finish starts.
 - Build intervention using selected Snapshot generatedImage or runtime state as base.
 - Apply finish-oriented settings.
 - Display Finish result.
@@ -277,10 +299,11 @@ Done when:
 - Finish requires selectedSnapshotId.
 - Finish uses selected Snapshot as base.
 - Runtime state is used if available.
+- Auto is stopped while Finish runs.
 - Original Snapshot remains.
 - Finish result can be saved as a new Snapshot.
 
-Acceptance: AC-FIN-001, AC-FIN-002, AC-FIN-003, AC-FIN-004.
+Acceptance: AC-FIN-001, AC-FIN-002, AC-FIN-003, AC-FIN-004, AC-FIN-005.
 
 ## Task 11: TinySD Stateful Latent Runtime hook
 
@@ -291,8 +314,9 @@ Implement:
 - TinySD runtime behind DiffusionRuntime interface.
 - Runtime session with latent/timestep where feasible.
 - Prompt embedding cache where feasible.
-- noiseMask to latent-mask conversion where feasible.
-- Local latent noise injection where feasible.
+- globalExplorationNoiseStrength as low ambient state noise where feasible.
+- activeNoiseMask to latent-mask conversion only while noiseBrushActive is true.
+- Local rejection noise injection where feasible.
 - 1 to 3 denoise steps per Explore update.
 - Preview decode.
 - Fallback to mock when TinySD is unavailable.
@@ -315,11 +339,12 @@ Implement:
 - v0.1 demo steps.
 - Known limitations.
 - Explanation that runtime is stateful and not ordinary blank-state regeneration.
+- Explanation that Noise Brush is momentary and only active while pressed/dragged.
 
 Minimum demo:
 
 ```text
-Prompt → Step → Human Layer → Auto → Noise Brush → Snapshot → Restore → Finish
+Prompt → Step → Human Layer → Auto → hold Noise Brush → release Noise Brush → Snapshot → Restore → Finish
 ```
 
 Done when:
