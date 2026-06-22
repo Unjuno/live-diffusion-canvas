@@ -12,9 +12,13 @@ Text condition that defines the generation direction.
 
 Independent drawing layer controlled by the user. It is not the final image. It is an intervention signal.
 
+Generated Image updates, Noise Brush, and Auto Mode must not modify Human Layer.
+
 ## Generated Image
 
-Current image state shown on the right-side canvas.
+Current image state shown on the generated-image canvas.
+
+Step, Auto, and Finish update Generated Image.
 
 ## Noise Brush
 
@@ -22,11 +26,19 @@ Brush used on Generated Image to mark a region for re-generation. It is not a no
 
 ## noiseMask
 
-Mask created by Noise Brush. It tells the next generation request which region should be reconsidered.
+Mask created by Noise Brush. It tells the next GenerationRequest which region should be reconsidered.
+
+## Noise Strength
+
+Single v0.1 value that controls the strength of reinterpreting the noiseMask region.
+
+v0.1 does not define a separate global denoise strength.
 
 ## Snapshot
 
-Saved intermediate state. It is used for restore, branch base, and finish base.
+Saved intermediate state. It is used for restore and finish base.
+
+Snapshot may include `parentId`, but v0.1 does not require Branch Tree UI.
 
 ## Restore
 
@@ -50,11 +62,30 @@ One user action triggers one generation update.
 
 ## Auto Mode
 
-Generation updates repeatedly at a configured interval.
+Generation updates are attempted repeatedly at a configured interval.
+
+If the previous request is still running, the implementation may skip or wait.
 
 ## Pause Mode
 
 Stops Auto Mode while keeping UI interaction available.
+
+## selectedBackend
+
+The backend implementation selected for generation.
+
+Allowed v0.1 values:
+
+```text
+mock
+tinysd
+```
+
+## selectedModel
+
+The model identifier passed to the selected backend.
+
+For mock backend, `mock` is acceptable.
 
 ## Seed
 
@@ -68,10 +99,6 @@ Controls how strongly Prompt is followed.
 
 Number of denoising or generation-update steps.
 
-## Noise Strength
-
-Controls how much a region is returned to uncertainty.
-
 ## Update Interval
 
 Auto Mode interval in milliseconds.
@@ -83,6 +110,16 @@ Non-model backend used to validate UI and state flow before real model integrati
 ## TinySD backend
 
 Lightweight diffusion backend target after the mock implementation works.
+
+## requestId
+
+Monotonic request identifier used to prevent stale responses from overwriting newer state.
+
+## stale response
+
+A response from an older request that returns after a newer request has already been issued.
+
+It must not overwrite newer Generated Image state.
 
 ## Pseudo resume
 
