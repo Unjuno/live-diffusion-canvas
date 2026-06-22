@@ -1,6 +1,8 @@
-# Live Diffusion Canvas 実装アーキテクチャ v0.1
+# Live Diffusion Canvas 実装アーキテクチャ v0.2
 
 この文書は、Live Diffusion Canvas v0.1 の実装構造を定義する。
+
+重要な前提：backend は単なる image-to-image 再生成器ではなく、`docs/sdd/runtime.md` で定義する Stateful Diffusion Runtime として扱う。
 
 ## 1. 推奨構成
 
@@ -13,13 +15,14 @@ apps/
       app/
       components/
       state/
+      runtime/
       generation/
       canvas/
       snapshots/
       types/
 ```
 
-実装フレームワークは固定しない。エージェントが判断する場合は React / Next.js 相当を優先する。
+`generation/` は互換名として残してよいが、中心概念は `runtime/` である。
 
 ## 2. レイヤー構成
 
@@ -38,10 +41,10 @@ State Layer
   actions
   selectors
 
-Generation Layer
-  GenerationBackend interface
-  MockGenerationBackend
-  TinySDGenerationBackend placeholder
+Runtime Layer
+  DiffusionRuntime interface
+  MockStatefulRuntime
+  TinySDStatefulLatentRuntime placeholder
 
 Canvas Layer
   human drawing capture
@@ -52,6 +55,7 @@ Snapshot Layer
   save
   restore
   finish base selection
+  optional runtime state reference
 ```
 
 ## 3. コンポーネント責務
@@ -92,7 +96,7 @@ Human Layer は Generated Image と別 state として保持する。
 
 責務：
 
-- Generated Image 表示
+- Generated Image preview 表示
 - Noise Brush 入力
 - noiseMask export
 
@@ -146,10 +150,11 @@ type AppState = {
   generatedImage: string | null;
   noiseMask: string | null;
 
+  runtimeSessionId: string | null;
+  latestRequestId: number;
+
   snapshots: Snapshot[];
   selectedSnapshotId: string | null;
-
-  latestRequestId: number;
 };
 ```
 
@@ -174,78 +179,106 @@ type Snapshot = {
   humanLayerDataUrl?: string;
   noiseMaskDataUrl?: string;
 
+  runtimeStateRef?: string;
   note?: string;
 };
 ```
 
-### GenerationRequest
+### DiffusionRuntimeState
 
 ```ts
-type GenerationRequest = {
-  requestId: number;
+type DiffusionRuntimeState = {
+  sessionId: string;
   prompt: string;
-  selectedBackend: "mock" | "tinysd";
-  selectedModel: string;
-  image?: string;
-  noiseMask?: string;
-  humanLayer?: string;
+  promptEmbedding?: unknown;
+  latent?: unknown;
+  timestep?: number;
+  schedulerState?: unknown;
+  width: number;
+  height: number;
   seed: number;
-  steps: number;
-  cfg: number;
-  noiseStrength: number;
+  latestPreviewImage?: string;
 };
 ```
 
-### GenerationResponse
+### DiffusionIntervention
 
 ```ts
-type GenerationResponse = {
+type DiffusionIntervention = {
   requestId: number;
-  image: string;
+  sessionId: string;
+  prompt?: string;
+  humanLayer?: string;
+  noiseMask?: string;
+  brushNoiseStrength: number;
+  stepsToAdvance: number;
+  mode: "explore" | "finish";
+};
+```
+
+### DiffusionRuntimeResponse
+
+```ts
+type DiffusionRuntimeResponse = {
+  requestId: number;
+  sessionId: string;
+  previewImage: string;
   seed: number;
+  timestep?: number;
   latencyMs: number;
 };
 ```
 
-## 5. GenerationBackend interface
+## 5. Runtime interface
 
 ```ts
-interface GenerationBackend {
+interface DiffusionRuntime {
   name: "mock" | "tinysd";
-  generate(request: GenerationRequest): Promise<GenerationResponse>;
+  createSession(input: {
+    prompt: string;
+    seed: number;
+    width: number;
+    height: number;
+  }): Promise<DiffusionRuntimeState>;
+
+  applyIntervention(
+    state: DiffusionRuntimeState,
+    intervention: DiffusionIntervention
+  ): Promise<{
+    state: DiffusionRuntimeState;
+    response: DiffusionRuntimeResponse;
+  }>;
 }
 ```
 
-v0.1 では、まず `MockGenerationBackend` を実装する。
+`GenerationBackend` / `GenerationRequest` / `GenerationResponse` という名前を内部互換として残してもよい。ただし意味は stateful runtime update であり、通常の Explore update で毎回 blank state から再生成してはならない。
 
-TinySD backend は、同じ interface を満たす別実装として追加する。
-
-## 6. 生成フロー
-
-### Step
+## 6. Step flow
 
 ```text
-1. latestRequestId を increment する。
-2. AppState から GenerationRequest を作る。
-3. generationStatus を generating にする。
-4. backend.generate(request) を呼ぶ。
-5. response.requestId が latestRequestId と一致する場合のみ反映する。
-6. generatedImage を response.image に更新する。
-7. generationStatus を idle に戻す。
+1. runtimeSessionId がなければ createSession する。
+2. latestRequestId を increment する。
+3. AppState から DiffusionIntervention を作る。
+4. generationStatus を generating にする。
+5. runtime.applyIntervention(state, intervention) を呼ぶ。
+6. response.requestId が latestRequestId と一致する場合のみ反映する。
+7. generatedImage を response.previewImage に更新する。
+8. runtime state を保持する。
+9. generationStatus を idle に戻す。
 ```
 
 エラー時は `generationStatus = error` とし、`errorMessage` を設定する。
 
-### Auto
+## 7. Auto flow
 
 ```text
 1. mode を auto にする。
-2. updateIntervalMs ごとに Step 相当の処理を試みる。
+2. updateIntervalMs ごとに Step 相当の runtime update を試みる。
 3. 生成中に次の tick が来た場合は skip または待機する。
 4. Pause が押されたら新しい request を出さない。
 ```
 
-## 7. stale response 対策
+## 8. stale response 対策
 
 各 request に `requestId` を付与する。
 
@@ -259,9 +292,24 @@ if (response.requestId !== state.latestRequestId) {
 
 または、single-flight 方式で同時に 1 request だけ実行してもよい。
 
-どちらを採用しても、古い response が新しい状態を上書きしてはならない。
+どちらを採用しても、古い response が新しい state を上書きしてはならない。
 
-## 8. Snapshot フロー
+## 9. Noise Brush runtime behavior
+
+Preferred real-runtime behavior:
+
+```text
+noiseMask
+→ latent resolution に変換
+→ mask 領域だけ latent に noise を混ぜる
+→ 1〜3 step denoise
+→ preview decode
+→ updated runtime state を保持
+```
+
+Mock runtime では、この処理を視覚的・ログ的に模倣してよい。
+
+## 10. Snapshot flow
 
 ### Save Snapshot
 
@@ -278,6 +326,7 @@ if (response.requestId !== state.latestRequestId) {
 - humanLayer
 - noiseMask
 - parentId
+- runtimeStateRef if available
 
 ### Restore Snapshot
 
@@ -294,10 +343,15 @@ if (response.requestId !== state.latestRequestId) {
 - humanLayer
 - noiseMask
 - selectedSnapshotId
+- runtimeSessionId if recoverable
+
+If runtime state cannot be restored, use image Snapshot pseudo resume.
 
 ### Finish from Snapshot
 
-選択 Snapshot の generatedImage を base image として generation request を作る。
+選択 Snapshot の generatedImage を base preview として Finish を開始する。
+
+Runtime state が保存されている場合は、それを優先して使う。
 
 Finish 用の設定を使う。
 
@@ -309,42 +363,43 @@ cfg: 3.0-6.0
 
 元 Snapshot は削除しない。
 
-## 9. Mock backend の仕様
+## 11. Mock Stateful Runtime
 
-Mock backend は実際の拡散品質を目指さない。
+Mock runtime は実際の拡散品質を目指さない。
 
 最低限、以下を満たす。
 
+- sessionId を作る。
 - request を受け取る。
-- data URL 画像を返す。
+- preview image を返す。
 - prompt、requestId、seed、noiseMask 有無などを画像またはログで確認できる。
 - latencyMs を返す。
+- runtime state 更新を擬似的に示す。
 - エラー状態のテストができる。
 
-Mock 画像は canvas で生成してよい。
+## 12. TinySD Stateful Latent Runtime
 
-## 10. 実モデル接続の境界
+TinySD runtime は v0.1 の first real backend candidate である。
 
-TinySD などの実モデル接続は、UI と state から分離する。
+要求される方向性：
 
-UI は backend 実装の詳細を直接知らない。
+- latent state を保持する。
+- timestep を保持する。
+- scheduler state を保持できるなら保持する。
+- Prompt embedding を cache できるなら cache する。
+- noiseMask を latent 解像度に変換する。
+- mask 領域に noise を注入する。
+- 1〜3 step 進める。
+- preview を decode する。
 
-Backend / Model selector は `selectedBackend` と `selectedModel` を更新するだけにする。
+TinySD が利用不可でもアプリは Mock runtime で起動しなければならない。
 
-## 11. エラー処理
-
-生成エラー時：
-
-- generationStatus を error にする。
-- errorMessage を表示する。
-- Human Layer、Generated Image、Snapshot は保持する。
-- Step / Auto / Pause の操作は継続可能にする。
-
-## 12. 実装しないもの
+## 13. 実装しないもの
 
 - persistent database
 - user authentication
 - multi-user session
 - ControlNet pipeline
-- latent state persistence
+- required latent state persistence
 - production deployment
+- StreamDiffusion runtime
