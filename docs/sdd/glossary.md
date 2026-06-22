@@ -1,8 +1,32 @@
-# Glossary v0.1
+# Glossary v0.2
 
 ## Live Diffusion Canvas
 
 A prototype for steering intermediate diffusion generation states with Prompt, Human Layer, Noise Brush, and Snapshot.
+
+## Stateful Diffusion Runtime
+
+A backend/runtime that holds diffusion process state, accepts human interventions, advances a small number of steps, returns a preview, and keeps updated state for the next intervention.
+
+It is not a pure prompt-to-final-image API.
+
+## DiffusionRuntimeState
+
+The runtime state for an active session.
+
+May include sessionId, prompt, prompt embedding, latent, timestep, scheduler state, seed, image size, and latest preview image.
+
+## DiffusionIntervention
+
+Human or UI input applied to a runtime state.
+
+May include prompt changes, Human Layer, noiseMask, brushNoiseStrength, stepsToAdvance, and mode.
+
+## DiffusionRuntimeResponse
+
+Response from a runtime update.
+
+Contains requestId, sessionId, previewImage, seed, optional timestep, and latencyMs.
 
 ## Prompt
 
@@ -16,21 +40,23 @@ Generated Image updates, Noise Brush, and Auto Mode must not modify Human Layer.
 
 ## Generated Image
 
-Current image state shown on the generated-image canvas.
+Preview image decoded or simulated from the current runtime state.
 
 Step, Auto, and Finish update Generated Image.
 
 ## Noise Brush
 
-Brush used on Generated Image to mark a region for re-generation. It is not a normal eraser.
+Brush used on Generated Image to mark a region for runtime intervention. It is not a normal eraser.
 
 ## noiseMask
 
-Mask created by Noise Brush. It tells the next GenerationRequest which region should be reconsidered.
+Mask created by Noise Brush. It tells the next DiffusionIntervention which region should be reconsidered.
+
+In a real latent runtime, the mask may be resized to latent resolution and used for local noise injection.
 
 ## Noise Strength
 
-Single v0.1 value that controls the strength of reinterpreting the noiseMask region.
+Single v0.1 value that controls the strength of reintroducing uncertainty in the noiseMask region.
 
 v0.1 does not define a separate global denoise strength.
 
@@ -38,15 +64,19 @@ v0.1 does not define a separate global denoise strength.
 
 Saved intermediate state. It is used for restore and finish base.
 
+Snapshot must store image and settings. It may also reference runtime state when available.
+
 Snapshot may include `parentId`, but v0.1 does not require Branch Tree UI.
 
 ## Restore
 
 Operation that loads a saved Snapshot back into current state.
 
+If runtime state is available, Restore may recover it. Otherwise it may use image Snapshot pseudo resume.
+
 ## Finish
 
-Operation that starts from a selected Snapshot and runs a stronger finishing generation.
+Operation that starts from a selected Snapshot and runs a stronger finishing update.
 
 ## Explore Mode
 
@@ -58,11 +88,11 @@ Mode for refining a selected Snapshot.
 
 ## Step Mode
 
-One user action triggers one generation update.
+One user action triggers one runtime update.
 
 ## Auto Mode
 
-Generation updates are attempted repeatedly at a configured interval.
+Runtime updates are attempted repeatedly at a configured interval.
 
 If the previous request is still running, the implementation may skip or wait.
 
@@ -72,7 +102,7 @@ Stops Auto Mode while keeping UI interaction available.
 
 ## selectedBackend
 
-The backend implementation selected for generation.
+The runtime/backend implementation selected for generation.
 
 Allowed v0.1 values:
 
@@ -97,34 +127,46 @@ Controls how strongly Prompt is followed.
 
 ## Steps
 
-Number of denoising or generation-update steps.
+Number of denoising or runtime-update steps.
 
 ## Update Interval
 
 Auto Mode interval in milliseconds.
 
-## Mock backend
+## Mock Stateful Runtime
 
-Non-model backend used to validate UI and state flow before real model integration.
+Non-model runtime used to validate UI and state flow before real model integration.
 
-## TinySD backend
+It should simulate session state rather than behave like a purely stateless final-image generator.
 
-Lightweight diffusion backend target after the mock implementation works.
+## TinySD Stateful Latent Runtime
+
+Preferred first real backend candidate for v0.1 if environment permits.
+
+It should maintain latent state and timestep where feasible, apply noiseMask as local latent intervention, advance a few steps, and decode preview.
 
 ## requestId
 
 Monotonic request identifier used to prevent stale responses from overwriting newer state.
 
+## sessionId
+
+Identifier for an active runtime session.
+
 ## stale response
 
 A response from an older request that returns after a newer request has already been issued.
 
-It must not overwrite newer Generated Image state.
+It must not overwrite newer Generated Image state or runtime state.
 
 ## Pseudo resume
 
-Using saved image Snapshot as a base image. This is allowed in v0.1.
+Using saved image Snapshot as a base image when runtime state is unavailable.
+
+This is allowed in v0.1.
 
 ## True latent resume
 
-Resume from latent state and timestep. This is out of scope for v0.1.
+Resume from latent state and timestep.
+
+It is optional in v0.1 and may become stronger in later versions.
