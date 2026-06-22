@@ -1,15 +1,17 @@
-# Tasks v0.1
+# Tasks v0.2
 
-Implement in this order. Do not skip ahead to model-quality work before the UI and mock flow work.
+Implement in this order. Do not skip ahead to model-quality work before the UI, state, and Mock Stateful Runtime work.
 
 ## Common rules
 
 - Follow `docs/sdd/spec.md`.
+- Use `docs/sdd/runtime.md` for runtime semantics.
 - Use `docs/sdd/architecture.md` for types and module boundaries.
 - Use `docs/sdd/acceptance.md` for completion checks.
-- Start with `MockGenerationBackend` before any real model backend.
+- Start with `MockStatefulRuntime` before any real model backend.
 - Keep Human Layer separate from Generated Image.
 - Keep Noise Brush limited to Generated Image.
+- Normal Explore updates must not always regenerate from blank state.
 
 ## Task 0: Project scaffold
 
@@ -49,13 +51,13 @@ Done when:
 
 - All major UI regions exist.
 - Controls are clickable or editable.
-- No backend is required.
+- No runtime is required.
 
 Acceptance: AC-UI-001, AC-UI-002.
 
 ## Task 2: App state model
 
-Purpose: centralize UI, generation, canvas, and snapshot state.
+Purpose: centralize UI, runtime, canvas, and snapshot state.
 
 Implement `AppState` from `docs/sdd/spec.md`, including:
 
@@ -75,9 +77,10 @@ Implement `AppState` from `docs/sdd/spec.md`, including:
 - humanLayer
 - generatedImage
 - noiseMask
+- runtimeSessionId
+- latestRequestId
 - snapshots
 - selectedSnapshotId
-- latestRequestId
 
 Done when:
 
@@ -104,54 +107,79 @@ Done when:
 
 Acceptance: AC-HL-001, AC-HL-002, AC-HL-003.
 
-## Task 4: Mock generation backend
+## Task 4: Runtime types and interface
+
+Purpose: establish stateful runtime semantics before backend implementation.
+
+Implement types from `docs/sdd/runtime.md` and `docs/sdd/architecture.md`:
+
+- DiffusionRuntimeState
+- DiffusionIntervention
+- DiffusionRuntimeResponse
+- DiffusionRuntime interface
+- compatibility aliases for GenerationRequest / GenerationResponse if useful
+
+Done when:
+
+- A runtime can create a session.
+- A runtime can apply an intervention.
+- requestId and sessionId are part of the flow.
+- The naming does not imply blank-state regeneration.
+
+Acceptance: AC-RUNTIME-001, AC-RUNTIME-002.
+
+## Task 5: Mock Stateful Runtime
 
 Purpose: validate UI and state flow before real model work.
 
 Implement:
 
-- `GenerationRequest` and `GenerationResponse` types.
-- `GenerationBackend` interface.
-- `MockGenerationBackend`.
-- Data URL image output.
+- `MockStatefulRuntime`.
+- sessionId creation.
+- pseudo runtime state update.
+- preview image output.
 - latencyMs output.
-- Visible or logged request metadata.
-- Error simulation path.
+- visible or logged intervention metadata.
+- error simulation path.
 
 Done when:
 
-- Step can produce a generated placeholder image.
-- requestId, prompt, selectedBackend, selectedModel, seed, steps, cfg, noiseStrength, image presence, noiseMask presence, and humanLayer presence are inspectable.
+- Step can produce a generated placeholder preview.
+- requestId, sessionId, prompt, selectedBackend, selectedModel, seed, steps, cfg, noiseStrength, image presence, noiseMask presence, and humanLayer presence are inspectable.
+- Runtime state visibly changes across updates.
 - Error handling can be tested.
 
-Acceptance: AC-MOCK-001, AC-MOCK-002.
+Acceptance: AC-MOCK-001, AC-MOCK-002, AC-RUNTIME-003.
 
-## Task 5: Basic generation flow
+## Task 6: Basic runtime update flow
 
-Purpose: connect state, controls, and backend response.
+Purpose: connect state, controls, and runtime response.
 
 Implement:
 
-- Build `GenerationRequest` from AppState.
+- Create runtime session when none exists.
+- Build `DiffusionIntervention` from AppState.
 - Increment latestRequestId for each request.
 - Set generationStatus to generating.
-- Call backend.generate.
+- Call runtime.applyIntervention.
 - Apply response only when requestId is current.
-- Update generatedImage.
+- Update generatedImage with response.previewImage.
+- Keep updated runtime state for the next intervention.
 - Set generationStatus to idle or error.
 - Set errorMessage on failure.
 
 Done when:
 
-- Step performs exactly one update.
-- Generated Image is displayed.
+- Step performs exactly one runtime update.
+- Generated Image preview is displayed.
+- Runtime state persists across Step calls.
 - Errors are visible and non-blocking.
 
-Acceptance: AC-GEN-001, AC-GEN-002, AC-GEN-003, AC-GEN-004.
+Acceptance: AC-GEN-001, AC-GEN-002, AC-GEN-003, AC-GEN-004, AC-GEN-005.
 
-## Task 6: Noise Brush mask
+## Task 7: Noise Brush mask
 
-Purpose: allow the user to mark regions of Generated Image for re-generation.
+Purpose: allow the user to mark regions of Generated Image for runtime intervention.
 
 Implement:
 
@@ -159,25 +187,25 @@ Implement:
 - Brush Size setting.
 - noiseMask state.
 - noiseMask export.
-- Include noiseMask in the next GenerationRequest.
+- Include noiseMask in the next DiffusionIntervention.
 
 Done when:
 
 - User can paint a mask on Generated Image.
 - Brush Size changes the painted area size.
-- Step and Auto requests include noiseMask when present.
+- Step and Auto interventions include noiseMask when present.
 - Human Layer is not changed.
 
-Acceptance: AC-NB-001, AC-NB-002, AC-NB-003, AC-NB-004.
+Acceptance: AC-NB-001, AC-NB-002, AC-NB-003, AC-NB-004, AC-NB-005.
 
-## Task 7: Step / Auto / Pause loop
+## Task 8: Step / Auto / Pause loop
 
 Purpose: create the continuous intermediate-state interaction loop.
 
 Implement:
 
-- Step mode: one update per click.
-- Auto mode: try updates every updateIntervalMs.
+- Step mode: one runtime update per click.
+- Auto mode: try runtime updates every updateIntervalMs.
 - Pause mode: stop new requests.
 - In-flight request handling by skip, wait, or single-flight.
 - stale response protection with requestId or equivalent.
@@ -192,7 +220,7 @@ Done when:
 
 Acceptance: AC-LOOP-001, AC-LOOP-002, AC-LOOP-003, AC-LOOP-004.
 
-## Task 8: Snapshot save / restore
+## Task 9: Snapshot save / restore
 
 Purpose: preserve and recover promising intermediate states.
 
@@ -203,6 +231,7 @@ Implement:
 - Snapshot Timeline thumbnail list.
 - Snapshot selection.
 - Restore Snapshot.
+- Optional runtimeStateRef if the runtime supports it.
 
 Snapshot must store:
 
@@ -219,16 +248,19 @@ Snapshot must store:
 - generatedImageDataUrl
 - humanLayerDataUrl when present
 - noiseMaskDataUrl when present
+- runtimeStateRef when available
 
 Done when:
 
 - Snapshot save works.
 - Restore reloads image and main settings.
+- Restore uses runtime state when available.
+- Restore can fall back to pseudo resume when runtime state is unavailable.
 - Original Snapshot remains.
 
-Acceptance: AC-SNAP-001, AC-SNAP-002, AC-SNAP-003, AC-SNAP-004.
+Acceptance: AC-SNAP-001, AC-SNAP-002, AC-SNAP-003, AC-SNAP-004, AC-SNAP-005.
 
-## Task 9: Finish from Snapshot
+## Task 10: Finish from Snapshot
 
 Purpose: turn a selected intermediate state into a finishing base.
 
@@ -236,7 +268,7 @@ Implement:
 
 - Select Snapshot.
 - Finish from Snapshot button.
-- Build request using selected Snapshot generatedImage as base image.
+- Build intervention using selected Snapshot generatedImage or runtime state as base.
 - Apply finish-oriented settings.
 - Display Finish result.
 
@@ -244,18 +276,25 @@ Done when:
 
 - Finish requires selectedSnapshotId.
 - Finish uses selected Snapshot as base.
+- Runtime state is used if available.
 - Original Snapshot remains.
 - Finish result can be saved as a new Snapshot.
 
 Acceptance: AC-FIN-001, AC-FIN-002, AC-FIN-003, AC-FIN-004.
 
-## Task 10: TinySD backend hook
+## Task 11: TinySD Stateful Latent Runtime hook
 
-Purpose: add a real lightweight backend after the mock flow works.
+Purpose: add the first real stateful diffusion runtime after the mock flow works.
 
 Implement:
 
-- TinySD backend behind GenerationBackend interface.
+- TinySD runtime behind DiffusionRuntime interface.
+- Runtime session with latent/timestep where feasible.
+- Prompt embedding cache where feasible.
+- noiseMask to latent-mask conversion where feasible.
+- Local latent noise injection where feasible.
+- 1 to 3 denoise steps per Explore update.
+- Preview decode.
 - Fallback to mock when TinySD is unavailable.
 - UI-visible error handling for backend failure.
 
@@ -263,9 +302,10 @@ Done when:
 
 - selectedBackend can choose mock or tinysd.
 - App still starts when TinySD is unavailable.
+- TinySD path follows stateful runtime semantics where environment permits.
 - Failures show errorMessage without breaking the UI.
 
-## Task 11: Documentation and demo path
+## Task 12: Documentation and demo path
 
 Purpose: make the project handoff-ready.
 
@@ -274,6 +314,7 @@ Implement:
 - Local startup instructions.
 - v0.1 demo steps.
 - Known limitations.
+- Explanation that runtime is stateful and not ordinary blank-state regeneration.
 
 Minimum demo:
 
