@@ -1,4 +1,4 @@
-# Agent Handoff v0.2
+# Agent Handoff v0.3
 
 You are implementing Live Diffusion Canvas v0.1.
 
@@ -26,11 +26,12 @@ Implement this interaction:
 Prompt input
 → runtime session creation
 → Human Layer drawing
-→ Generated Image preview update
-→ Noise Brush marks rejected local solution
-→ stateful runtime increases local uncertainty
-→ runtime explores an alternative local solution
-→ Auto loop
+→ Auto rolling intervention loop
+→ low global exploration noise keeps state moving
+→ Noise Brush held over bad region
+→ local rejection boost applies only while held/dragged
+→ release Noise Brush
+→ local rejection boost stops
 → Snapshot save
 → Snapshot restore
 → Finish from Snapshot
@@ -48,14 +49,20 @@ TinySD integration comes after Mock Stateful Runtime works.
 
 - Human Layer and Generated Image are separate.
 - Generated Image updates do not change Human Layer.
+- Auto Mode is a rolling intervention loop, not only a forward-to-final generation run.
+- Explore updates include low `globalExplorationNoiseStrength`.
 - Noise Brush applies to Generated Image only.
-- Noise Brush creates an intervention mask, not an erase operation.
 - Noise Brush is a "not this local solution" intervention.
+- Noise Brush is momentary: it applies only while the user is pressing or dragging.
+- On release/cancel, `noiseBrushActive = false` and `activeNoiseMask = null`.
+- Do not implement Noise Brush as normal erase.
 - Do not implement Noise Brush as local Human Layer application.
-- Prompt, Human Layer, and surrounding state guide the alternative solution after noise intervention.
+- Do not restore `lastNoiseMask` as active intervention.
+- Prompt, Human Layer, and surrounding state guide the alternative solution after local rejection input.
 - Auto Mode can be paused.
 - Runtime state is kept across normal Explore updates.
 - Snapshot is the base for Restore and Finish.
+- Finish from Snapshot stops Auto Mode while Finish runs.
 - Mock Stateful Runtime must support UI validation.
 - TinySD is the first real stateful latent runtime candidate, not merely a distant extension.
 
