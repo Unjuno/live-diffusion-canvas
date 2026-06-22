@@ -29,15 +29,18 @@ Read in this order:
 - Start with Mock Stateful Runtime before a real model runtime.
 - Keep Human Layer separate from Generated Image.
 - Apply Noise Brush to Generated Image only.
-- Treat Noise Brush as rejection of the current local solution.
+- Noise Brush marks the current local output as unwanted.
+- Noise Brush is momentary: use it only while the user is pressing or dragging.
+- On release or cancel, clear activeNoiseMask and stop local brush influence.
 - Do not interpret Noise Brush as applying Human Layer to the masked region.
-- Use Prompt, Human Layer, and surrounding runtime state as conditions for alternative local solution search after noise intervention.
+- Explore Mode must include low global exploration noise or a mock equivalent.
 - Keep Auto Mode stoppable.
 - Keep Snapshot restore and Finish from Snapshot working.
+- Do not restore lastNoiseMask as active brush input.
 - Do not make normal Explore updates always restart from blank state.
 
 ## v0.1 exclusions
 
-The v0.1 scope does not include ControlNet, diagram recognition, Mermaid conversion, authentication, collaboration, cloud deployment, required full latent-state snapshot restart, StreamDiffusion, or SDXL Finish backend.
+The v0.1 scope does not include ControlNet, diagram recognition, Mermaid conversion, authentication, collaboration, cloud deployment, required full latent-state snapshot restart, persistent brush masks, StreamDiffusion, or SDXL Finish backend.
 
 TinySD Stateful Latent Runtime is allowed as the first real backend candidate if the environment permits it.
