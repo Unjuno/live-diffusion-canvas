@@ -14,7 +14,7 @@ Explore intermediate state → Snapshot → Restore or Finish
 
 Human Layer is a user-controlled intervention layer.
 
-Generated Image updates must not modify it.
+Generated Image updates, Noise Brush, and Auto Mode must not modify it.
 
 ## D-003: Noise Brush is not an eraser
 
@@ -40,6 +40,8 @@ TinySD or an equivalent lightweight model is treated as a real-time interaction 
 
 Snapshots may keep `parentId`, but v0.1 only requires a simple timeline UI.
 
+Branch Tree UI is explicitly out of scope.
+
 ## D-008: Scheduler is fixed in v0.1
 
 Scheduler / sampler settings are not shown in v0.1 UI.
@@ -51,3 +53,21 @@ Continuous generation must remain controllable by the user.
 ## D-010: stale responses must not overwrite newer state
 
 Auto generation is asynchronous. The implementation must protect the current state from older responses.
+
+Use requestId checking or single-flight control.
+
+## D-011: selectedBackend and selectedModel are separate
+
+`selectedBackend` chooses the generation backend implementation.
+
+`selectedModel` is the model identifier passed to that backend.
+
+This avoids ambiguity between the UI model selector and the actual execution backend.
+
+## D-012: Noise Strength has one meaning in v0.1
+
+v0.1 uses one `noiseStrength` value.
+
+It controls the strength of reinterpreting the `noiseMask` region.
+
+A separate global denoise strength may be added in a later version only after a spec update.
