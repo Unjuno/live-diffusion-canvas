@@ -1,4 +1,4 @@
-# Decisions v0.1
+# Decisions v0.2
 
 ## D-001: This is not a final-image app
 
@@ -18,23 +18,27 @@ Generated Image updates, Noise Brush, and Auto Mode must not modify it.
 
 ## D-003: Noise Brush is not an eraser
 
-Noise Brush marks a region for re-generation. It does not mean ordinary deletion.
+Noise Brush marks a region for runtime intervention. It does not mean ordinary deletion.
 
-## D-004: v0.1 uses pseudo resume
+## D-004: v0.1 requires image Snapshot and permits runtime-state Snapshot
 
-v0.1 stores image snapshots and main parameters.
+v0.1 must store image snapshots and main parameters.
 
-True latent-state resume is valuable but out of scope for v0.1.
+Runtime-state Snapshot is optional.
 
-## D-005: Mock backend comes first
+If runtime state is unavailable, Restore may use image Snapshot pseudo resume.
+
+## D-005: Mock Stateful Runtime comes first
 
 The first implementation target is UI and state flow.
 
-Mock backend must work before TinySD or any other real model backend.
+Mock Stateful Runtime must work before TinySD or any other real model runtime.
 
-## D-006: TinySD is for interaction testing
+## D-006: TinySD is the first real stateful runtime candidate
 
-TinySD or an equivalent lightweight model is treated as a real-time interaction testbed, not as a final image quality target.
+TinySD or an equivalent lightweight diffusion model is not merely a distant extension.
+
+If environment permits, TinySD should be treated as the first real Stateful Latent Runtime candidate for v0.1.
 
 ## D-007: Tree UI is out of scope
 
@@ -45,6 +49,8 @@ Branch Tree UI is explicitly out of scope.
 ## D-008: Scheduler is fixed in v0.1
 
 Scheduler / sampler settings are not shown in v0.1 UI.
+
+The runtime may keep scheduler state internally.
 
 ## D-009: Auto Mode must be pausable
 
@@ -58,9 +64,9 @@ Use requestId checking or single-flight control.
 
 ## D-011: selectedBackend and selectedModel are separate
 
-`selectedBackend` chooses the generation backend implementation.
+`selectedBackend` chooses the runtime/backend implementation.
 
-`selectedModel` is the model identifier passed to that backend.
+`selectedModel` is the model identifier passed to that runtime/backend.
 
 This avoids ambiguity between the UI model selector and the actual execution backend.
 
@@ -68,6 +74,27 @@ This avoids ambiguity between the UI model selector and the actual execution bac
 
 v0.1 uses one `noiseStrength` value.
 
-It controls the strength of reinterpreting the `noiseMask` region.
+It controls the strength of reintroducing uncertainty into the `noiseMask` region.
 
 A separate global denoise strength may be added in a later version only after a spec update.
+
+## D-013: Runtime abstraction is stateful
+
+The backend abstraction is corrected from simple image-to-image generation to Stateful Diffusion Runtime.
+
+The runtime should hold or simulate diffusion process state, accept interventions, advance a small number of steps, return a preview, and keep state for the next intervention.
+
+## D-014: Extensions are intervention axes, not just model upgrades
+
+Future extensions should be organized by what they intervene in:
+
+```text
+latent intervention
+mask intervention
+conditioning intervention
+reference intervention
+scheduler/runtime intervention
+streaming intervention
+```
+
+This keeps ControlNet, IP-Adapter, LCM, StreamDiffusion, and SDXL-class backends aligned with the same product concept instead of treating them as unrelated model swaps.
