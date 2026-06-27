@@ -1,14 +1,52 @@
-# Glossary v0.3
+# Glossary v0.4
 
 ## Live Diffusion Canvas
 
-A prototype for steering intermediate diffusion generation states with Prompt, Human Layer, Noise Brush, and Snapshot.
+A prototype for steering intermediate diffusion generation states with Prompt, Guide Canvas, Noise Brush, and Snapshot.
 
 ## Stateful Diffusion Runtime
 
-A backend/runtime that holds diffusion process state, accepts human interventions, advances a small number of steps, returns a preview, and keeps updated state for the next intervention.
+A backend/runtime that holds diffusion process state, accepts interventions, advances a small number of update steps, returns a preview, and keeps updated state for the next intervention.
 
 It is not a pure prompt-to-final-image API.
+
+## Guide Canvas
+
+Editable positive guide surface used to direct generation.
+
+It replaces the older standalone Human Layer concept.
+
+Guide Canvas is separate from Generated Image and must not be modified by generation updates or Noise Brush.
+
+## Imported Image Layer
+
+Image imported into Guide Canvas as a guide base.
+
+In v0.1, import is guide-only and does not automatically initialize runtime state from the image.
+
+## Human Draw Layer
+
+User-drawn sublayer inside Guide Canvas.
+
+Clear Draw affects this sublayer only and must not delete Imported Image Layer.
+
+## Guide Erase Mask
+
+Non-destructive mask that hides parts of Imported Image Layer.
+
+It is not Noise Brush and does not reject Generated Image content.
+
+## Guide Composite
+
+Composite guide image produced from Imported Image Layer, Guide Erase Mask, and Human Draw Layer.
+
+It may be passed to the runtime as `guideComposite`.
+
+## Guide Influence
+
+Strength of Guide Composite influence on runtime updates.
+
+Represented as `guideInfluence`.
 
 ## DiffusionRuntimeState
 
@@ -20,7 +58,7 @@ May include sessionId, prompt, prompt embedding, latent, timestep, scheduler sta
 
 Human or UI input applied to a runtime state.
 
-May include prompt changes, Human Layer, global exploration noise, momentary Noise Brush state, activeNoiseMask, localRejectionStrength, stepsToAdvance, and phase.
+May include prompt changes, guideComposite, guideInfluence, global exploration noise, momentary Noise Brush state, activeNoiseMask, localRejectionStrength, updatesToAdvance, and phase.
 
 ## DiffusionRuntimeResponse
 
@@ -34,36 +72,28 @@ Text condition that defines the generation direction.
 
 Prompt changes do not automatically destroy the current runtime session.
 
-## Human Layer
-
-Independent drawing layer controlled by the user. It is not the final image. It is a positive intervention signal or guiding condition.
-
-Generated Image updates, Noise Brush, and Auto Mode must not modify Human Layer.
-
-Noise Brush does not mean that Human Layer is applied to the masked region.
-
 ## Generated Image
 
 Preview image decoded or simulated from the current runtime state.
 
-Step, Auto, and Finish update Generated Image.
+Run loop and Finish update Generated Image.
 
 ## Global Exploration Noise
 
-Low-strength uncertainty injected into the runtime state during Explore Mode to keep the generation process moving.
+Low-strength uncertainty injected into the runtime state during Explore to keep the generation process moving.
 
 It is controlled by `globalExplorationNoiseStrength`.
 
 ## Noise Brush
 
-Momentary brush used on Generated Image to mark a region whose **current local solution is rejected**.
+Momentary brush used on Generated Image to mark a region whose current local solution is rejected.
 
 It applies only while the user is actively pressing or dragging.
 
 It is not:
 
 - a normal eraser
-- a direct Human Layer apply tool
+- a direct Guide Canvas apply tool
 - a persistent mask by default
 
 Its role is to increase uncertainty in that region during active brushing so future runtime updates move away from the current local interpretation.
@@ -86,8 +116,6 @@ the current output in this active brushed region is not acceptable
 
 The runtime uses this mask to increase local uncertainty and search for an alternative local solution.
 
-In a real latent runtime, the mask may be resized to latent resolution and used for local uncertainty or noise injection.
-
 `activeNoiseMask` must be cleared on pointerup, touchend, or cancel.
 
 ## lastNoiseMask
@@ -108,7 +136,7 @@ It is controlled by `localRejectionStrength`.
 
 Saved intermediate state. It is used for restore and finish base.
 
-Snapshot must store image and settings. It may also reference runtime state when available.
+Snapshot must store image and settings. It should store Guide Canvas data when present. It may also reference runtime state when available.
 
 Snapshot may include `parentId`, but v0.1 does not require Branch Tree UI.
 
@@ -126,44 +154,48 @@ Restore must not reactivate lastNoiseMask as active rejection input.
 
 Operation that starts from a selected Snapshot and runs a stronger finishing update.
 
-Starting Finish should stop Auto Mode.
+Starting Finish should stop Run loop.
 
-## Explore Mode
+## Explore
 
-Mode for finding promising intermediate structure.
+Phase for finding promising intermediate structure.
 
-Explore Mode uses a rolling intervention loop and low global exploration noise.
+Explore uses a rolling intervention loop and low global exploration noise.
 
-## Finish Mode
+## Finish Phase
 
-Mode for refining a selected Snapshot.
+Phase for refining a selected Snapshot.
+
+## Run loop
+
+Repeated runtime updates at a configured interval.
+
+Run loop is the primary interaction mode in v0.1.
+
+## Pause
+
+Stops new Run loop requests while keeping UI interaction available.
+
+## Resume
+
+Restarts Run loop from the current runtime state.
 
 ## Step Mode
 
-One user action triggers one runtime update.
+User-facing Step Mode is out of scope for v0.1.
 
-## Auto Mode
+An internal one-tick runtime function is allowed, but it must not appear as a product mode.
 
-Runtime updates are attempted repeatedly at a configured interval.
+## loopStatus
 
-If the previous request is still running, the implementation may skip or wait.
-
-Auto Mode should behave as a rolling intervention loop, not only a forward-to-final-image process.
-
-## Pause Mode
-
-Stops Auto Mode while keeping UI interaction available.
-
-## controlMode
-
-UI control mode.
+UI loop state.
 
 Allowed values:
 
 ```text
-step
-auto
-pause
+idle
+running
+paused
 ```
 
 ## generationPhase
@@ -181,18 +213,25 @@ finish
 
 The runtime/backend implementation selected for generation.
 
-Allowed v0.1 values:
-
-```text
-mock
-tinysd
-```
+May be `mock`, a direct runtime, or a fork/adapter backend.
 
 ## selectedModel
 
 The model identifier passed to the selected backend.
 
 For mock backend, `mock` is acceptable.
+
+## Backend Adapter
+
+A wrapper around an existing tool or backend that exposes Live Diffusion Canvas runtime semantics.
+
+An adapter may simulate state for v0.1 but must not turn the product into ordinary one-shot generation.
+
+## Fork Strategy
+
+Using an existing project as a starting point is allowed if it preserves the SDD semantics.
+
+Forking is optional, not required.
 
 ## Seed
 
@@ -202,25 +241,15 @@ Randomness control value.
 
 Controls how strongly Prompt is followed.
 
-## Steps
-
-Number of denoising or runtime-update steps.
-
 ## Update Interval
 
-Auto Mode interval in milliseconds.
+Run loop interval in milliseconds.
 
 ## Mock Stateful Runtime
 
 Non-model runtime used to validate UI and state flow before real model integration.
 
 It should simulate session state rather than behave like a purely stateless final-image generator.
-
-## TinySD Stateful Latent Runtime
-
-Preferred first real backend candidate for v0.1 if environment permits.
-
-It should maintain latent state and timestep where feasible, apply global exploration noise, apply activeNoiseMask only while Noise Brush is active, advance a few steps, and decode preview.
 
 ## requestId
 
