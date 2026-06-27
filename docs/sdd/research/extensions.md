@@ -1,10 +1,10 @@
-# Extension Research v0.3
+# Extension Research v0.4
 
 This document records future extension candidates for Live Diffusion Canvas.
 
-The correction in this version is important: extensions are not primarily model-name upgrades. They are different ways to intervene in diffusion runtime state.
+Extensions are not primarily model-name upgrades. They are different ways to intervene in diffusion runtime state or reuse existing tooling while preserving the product semantics.
 
-These items are research notes unless explicitly promoted into `spec.md`, `runtime.md`, `architecture.md`, `tasks.md`, `acceptance.md`, and `decisions.md`.
+These items are research notes unless explicitly promoted into `spec.md`, `runtime.md`, `implementation_strategy.md`, `architecture.md`, `tasks.md`, `acceptance.md`, and `decisions.md`.
 
 ## 1. Correct abstraction
 
@@ -21,16 +21,30 @@ The intended abstraction is:
 ```text
 hold diffusion runtime state
 → apply low global exploration noise
-→ apply human intervention
+→ apply Prompt and Guide Composite
 → optionally apply momentary local rejection while Noise Brush is active
-→ advance a few steps
+→ advance a few updates
 → return preview
 → keep state alive
 ```
 
-This means TinySD is not merely a placeholder model. TinySD can be the first real stateful diffusion runtime if it exposes enough internal state for latent and timestep intervention.
+## 2. v0.1 tool reuse note
 
-## 2. Intervention axes
+Using an existing tool is allowed if it accelerates delivery.
+
+Potential routes:
+
+```text
+custom minimal app + Mock Stateful Runtime
+direct Diffusers / TinySD runtime
+ComfyUI backend adapter
+InvokeAI fork or adapter
+other compatible tool adapter
+```
+
+Tool reuse must not change the product into ordinary one-shot inpainting or prompt-to-final-image generation.
+
+## 3. Intervention axes
 
 Future extensions should be classified by the kind of state they intervene in.
 
@@ -38,27 +52,30 @@ Future extensions should be classified by the kind of state they intervene in.
 |---|---|---|
 | Latent intervention | latent state, timestep, scheduler | TinySD, SD1.5, SDXL |
 | Mask intervention | active rejected masked latent/image region | SDEdit, RePaint, inpainting |
-| Conditioning intervention | external spatial condition | ControlNet, T2I-Adapter |
+| Conditioning intervention | Guide Composite as external spatial condition | ControlNet, T2I-Adapter |
 | Reference intervention | image/reference embedding | IP-Adapter, snapshot reference |
 | Scheduler/runtime intervention | step schedule, consistency path | LCM, SDXL Turbo |
 | Streaming intervention | persistent interactive pipeline | StreamDiffusion |
+| Tool adapter | existing UI/backend reuse | ComfyUI, InvokeAI, Diffusers app |
 
-## 3. Latent intervention
+## 4. Latent intervention
 
-### 3.1 TinySD Stateful Latent Runtime
+### 4.1 Direct Diffusers / TinySD Stateful Runtime
 
-TinySD should be treated as the preferred first real backend candidate, not as a distant extension.
+Preferred if precise runtime control matters.
 
 Potential mapping:
 
 ```text
 DiffusionRuntimeState.latent
 + DiffusionRuntimeState.timestep
++ Guide Composite
 + globalExplorationNoiseStrength
 + activeNoiseMask only while Noise Brush is active
 → low ambient latent noise
+→ guide-aware update
 → optional local rejection noise injection
-→ 1 to 3 denoise steps
+→ 1 to 3 updates
 → preview decode
 ```
 
@@ -68,18 +85,9 @@ Scope:
 v0.1 preferred real backend if feasible
 ```
 
-### 3.2 SD / SDXL Stateful Latent Runtime
+### 4.2 SD / SDXL Stateful Latent Runtime
 
 The same concept can apply to larger Stable Diffusion variants if the runtime can hold latent state and timestep.
-
-Potential mapping:
-
-```text
-same intervention model
-larger model
-slower Explore loop
-better Finish quality
-```
 
 Scope:
 
@@ -87,7 +95,7 @@ Scope:
 future backend plugin
 ```
 
-## 4. Mask intervention
+## 5. Mask intervention
 
 Mask intervention in this project should be understood as:
 
@@ -95,15 +103,13 @@ Mask intervention in this project should be understood as:
 - temporary increase of local uncertainty while Noise Brush is active
 - search for an alternative local interpretation
 
-It should not be framed as "apply Human Layer inside the mask".
+It should not be framed as "apply Guide Canvas inside the mask".
 
 In v0.1, Noise Brush is momentary. Persistent / pinned masks are out of scope.
 
-### 4.1 SDEdit-style local re-diffusion
+### 5.1 SDEdit-style local re-diffusion
 
-Use the current state, inject noise, then denoise back toward the prompt.
-
-This is a direct formalization of Noise Brush only when Noise Brush is interpreted as active rejection of the current local solution.
+Use the current state, inject noise, then denoise back toward the prompt and guide.
 
 Potential mapping:
 
@@ -111,7 +117,7 @@ Potential mapping:
 activeNoiseMask = active rejected local solution region
 localRejectionStrength = amount of local uncertainty injection
 globalExplorationNoiseStrength = low ambient exploration noise
-Prompt / Human Layer / surrounding state = conditions for alternative search
+Prompt / Guide Composite / surrounding state = conditions for alternative search
 ```
 
 Scope:
@@ -120,23 +126,11 @@ Scope:
 v0.2 candidate
 ```
 
-Reference:
-
-- SDEdit: Guided Image Synthesis and Editing with Stochastic Differential Equations
-- https://arxiv.org/abs/2108.01073
-
-### 4.2 RePaint-style masked denoising
+### 5.2 RePaint-style masked denoising
 
 Use a mask to preserve known regions and regenerate unknown regions.
 
-In this project, the masked region means "the current local solution is rejected," not "put Human Layer here."
-
-Potential mapping:
-
-```text
-unmasked region = preserved surrounding state
-masked region = active rejection / local uncertainty region
-```
+In this project, the masked region means "the current local solution is rejected," not "put Guide Canvas here."
 
 Scope:
 
@@ -144,12 +138,7 @@ Scope:
 v0.2 or v0.3 candidate
 ```
 
-Reference:
-
-- RePaint: Inpainting using Denoising Diffusion Probabilistic Models
-- https://arxiv.org/abs/2201.09865
-
-### 4.3 DiffEdit-style smart mask
+### 5.3 DiffEdit-style smart mask
 
 Suggest the mask from semantic or prompt difference.
 
@@ -161,26 +150,19 @@ Scope:
 later than v0.2
 ```
 
-Reference:
+## 6. Conditioning intervention
 
-- DiffEdit: Diffusion-based semantic image editing with mask guidance
-- https://arxiv.org/abs/2210.11427
+### 6.1 ControlNet Scribble / Lineart
 
-## 5. Conditioning intervention
-
-### 5.1 ControlNet Scribble / Lineart
-
-Use Human Layer as spatial conditioning.
+Use Guide Composite as spatial conditioning.
 
 Potential mapping:
 
 ```text
-Human Layer
-→ scribble / lineart condition
+Guide Composite
+→ scribble / lineart / image condition
 → conditioned diffusion state update
 ```
-
-This changes Human Layer from independent stored layer into active conditioning input.
 
 Scope:
 
@@ -188,19 +170,14 @@ Scope:
 v0.3 candidate
 ```
 
-Reference:
-
-- Adding Conditional Control to Text-to-Image Diffusion Models
-- https://arxiv.org/abs/2302.05543
-
-### 5.2 T2I-Adapter
+### 6.2 T2I-Adapter
 
 Use a lightweight adapter to condition generation with external structure.
 
 Potential mapping:
 
 ```text
-Human Layer
+Guide Composite
 → structure adapter
 → generation control
 ```
@@ -211,14 +188,9 @@ Scope:
 v0.3 or later
 ```
 
-Reference:
+## 7. Reference intervention
 
-- T2I-Adapter: Learning Adapters to Dig out More Controllable Ability for Text-to-Image Diffusion Models
-- https://arxiv.org/abs/2302.08453
-
-## 6. Reference intervention
-
-### 6.1 IP-Adapter snapshot reference
+### 7.1 IP-Adapter snapshot reference
 
 Use a selected Snapshot as an image prompt or reference.
 
@@ -230,22 +202,37 @@ selected Snapshot
 → preserve style, structure, or layout
 ```
 
-This matches the idea that a good intermediate state can become an anchor.
-
 Scope:
 
 ```text
 v0.4 candidate
 ```
 
-Reference:
+## 8. Tool adapter routes
 
-- IP-Adapter: Text Compatible Image Prompt Adapter for Text-to-Image Diffusion Models
-- https://arxiv.org/abs/2308.06721
+### 8.1 ComfyUI backend adapter
 
-## 7. Scheduler and runtime intervention
+Use ComfyUI for model/workflow execution while keeping Live Diffusion Canvas as the UX.
 
-### 7.1 LCM / LCM-LoRA
+Scope:
+
+```text
+v0.1 spike or v0.2 backend route
+```
+
+### 8.2 InvokeAI fork or adapter
+
+Use InvokeAI-like canvas infrastructure if canvas reuse is faster.
+
+Scope:
+
+```text
+v0.1 spike or v0.2 backend route
+```
+
+## 9. Scheduler and runtime intervention
+
+### 9.1 LCM / LCM-LoRA
 
 Use low-step latent consistency behavior to make state updates faster.
 
@@ -257,21 +244,9 @@ Scope:
 v0.3 or later
 ```
 
-Reference:
-
-- Latent Consistency Models / LCM-LoRA
-- https://arxiv.org/abs/2311.05556
-
-### 7.2 SDXL Turbo / ADD-style backend
+### 9.2 SDXL Turbo / ADD-style backend
 
 Use few-step distilled generation for rapid previews.
-
-Potential mapping:
-
-```text
-Explore Mode = fast few-step runtime
-Finish Mode = slower high-quality runtime
-```
 
 Scope:
 
@@ -279,24 +254,11 @@ Scope:
 v0.4 candidate
 ```
 
-Reference:
+## 10. Streaming intervention
 
-- Adversarial Diffusion Distillation
-- https://arxiv.org/abs/2311.17042
-
-## 8. Streaming intervention
-
-### 8.1 StreamDiffusion-style runtime
+### 10.1 StreamDiffusion-style runtime
 
 Use a pipeline designed for interactive image generation.
-
-Potential mapping:
-
-```text
-continuous human input
-→ persistent generation stream
-→ low-latency preview updates
-```
 
 Scope:
 
@@ -304,73 +266,30 @@ Scope:
 v0.5 or later
 ```
 
-Reference:
-
-- StreamDiffusion: A Pipeline-level Solution for Real-time Interactive Generation
-- https://arxiv.org/abs/2312.12491
-
-## 9. Quality and model upgrades
-
-### 9.1 SDXL Finish backend
-
-Use SDXL or another high-quality model only for Finish Mode.
-
-Potential mapping:
-
-```text
-Explore Mode = TinySD / fast runtime
-Finish Mode = SDXL / higher-quality runtime
-```
-
-Scope:
-
-```text
-v0.4 candidate
-```
-
-Reference:
-
-- SDXL: Improving Latent Diffusion Models for High-Resolution Image Synthesis
-- https://arxiv.org/abs/2307.01952
-
-### 9.2 SD3 / SD3.5 / Flux-class backends
-
-Treat future model families as runtime plugins.
-
-Scope:
-
-```text
-future backend plugin only
-```
-
-## 10. Revised roadmap
+## 11. Revised roadmap
 
 ### v0.1
 
-Keep current SDD scope, but use stateful runtime terminology.
-
 ```text
+Guide Canvas
 Mock Stateful Runtime
-TinySD Stateful Latent Runtime if feasible
+Run loop
 Global Exploration Noise
 Momentary Noise Brush local rejection
-Human Layer
 Snapshot
 Finish from Snapshot
+Backend adapter spike if useful
 ```
 
 ### v0.2
 
-Strengthen Noise Brush as local rejection intervention.
-
 ```text
 SDEdit-style local re-diffusion
 RePaint-style mask handling
+stronger adapter backend
 ```
 
 ### v0.3
-
-Make Human Layer an active conditioning signal.
 
 ```text
 ControlNet Scribble / Lineart
@@ -378,35 +297,26 @@ T2I-Adapter structure control
 LCM-style speedup if needed
 ```
 
-### v0.4
-
-Use Snapshot as a stronger anchor and improve Finish.
+### v0.4+
 
 ```text
 IP-Adapter snapshot reference
 SDXL Finish backend
-SDXL Turbo / ADD-style preview
-```
-
-### v0.5
-
-Move toward persistent streaming generation.
-
-```text
 StreamDiffusion-style runtime
-more aggressive runtime scheduling
 ```
 
-## 11. Explicit non-scope for v0.1
+## 12. Explicit non-scope for v0.1
 
 The following must not be implemented in v0.1 unless the SDD is updated:
 
+- user-facing Step Mode
+- Base Image Init Mode
 - SDEdit local re-diffusion as a required feature
-- RePaint mask inpainting
+- RePaint mask inpainting as a required feature
 - DiffEdit smart mask
-- ControlNet
-- T2I-Adapter
-- IP-Adapter
+- ControlNet as required runtime
+- T2I-Adapter as required runtime
+- IP-Adapter as required runtime
 - LCM / LCM-LoRA as required runtime
 - SDXL Turbo
 - StreamDiffusion
@@ -417,7 +327,7 @@ The following must not be implemented in v0.1 unless the SDD is updated:
 Important nuance:
 
 ```text
-TinySD Stateful Latent Runtime is allowed as the first real v0.1 backend.
-LCM / StreamDiffusion are future optimizations, not prerequisites for real-time-ish interaction.
-Noise Brush is a momentary rejection brush, not a persistent mask and not a Human Layer apply mask.
+Existing tool fork/adapter use is allowed.
+Custom minimal build remains the default if it is clearer and faster.
+Noise Brush is a momentary rejection brush, not a persistent mask and not a Guide Canvas apply mask.
 ```
