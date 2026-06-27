@@ -1,4 +1,4 @@
-# Acceptance Criteria v0.3
+# Acceptance Criteria v0.4
 
 v0.1 is complete only when the following observable criteria pass.
 
@@ -6,24 +6,26 @@ v0.1 is complete only when the following observable criteria pass.
 
 1. User can enter a Prompt.
 2. User can select `selectedBackend` and `selectedModel`.
-3. User can run one Step runtime update.
-4. User can draw on Human Layer.
-5. Human Layer is stored separately from Generated Image.
-6. User can hold/drag Noise Brush on Generated Image.
-7. While Noise Brush is active, the next DiffusionIntervention includes activeNoiseMask.
-8. After Noise Brush release, active local rejection stops.
-9. User can start Auto Mode.
-10. User can Pause Auto Mode.
-11. User can save a Snapshot.
-12. User can restore a Snapshot.
-13. User can run Finish from a selected Snapshot.
-14. Generation errors are visible in the UI through `errorMessage` or equivalent.
-15. The UI remains usable after a generation error.
-16. Generated Image updates do not change Human Layer.
-17. Old responses cannot overwrite newer Generated Image state.
-18. Normal Explore updates do not always restart from blank state.
-19. Explore Auto updates include low global exploration noise or an inspectable mock equivalent.
-20. Noise Brush is implemented as momentary local rejection / uncertainty boost, not as erase, persistent mask, or local Human Layer application.
+3. User can import an image into Guide Canvas.
+4. User can draw on Human Draw Layer.
+5. User can erase/hide parts of Imported Image non-destructively through Guide Erase Mask.
+6. Guide Canvas is stored separately from Generated Image.
+7. User can start Run loop.
+8. User can Pause and Resume Run loop.
+9. User can hold/drag Noise Brush on Generated Image.
+10. While Noise Brush is active, the next DiffusionIntervention includes activeNoiseMask.
+11. After Noise Brush release, active local rejection stops.
+12. User can save a Snapshot.
+13. User can restore a Snapshot.
+14. User can run Finish from a selected Snapshot.
+15. Generation errors are visible in the UI through `errorMessage` or equivalent.
+16. The UI remains usable after a generation error.
+17. Generated Image updates do not change Guide Canvas.
+18. Old responses cannot overwrite newer Generated Image state.
+19. Normal Explore updates do not always restart from blank state.
+20. Explore Run updates include low global exploration noise or an inspectable mock equivalent.
+21. Noise Brush is implemented as momentary local rejection / uncertainty boost, not as erase, persistent mask, or local Guide Canvas application.
+22. The UI has no user-facing Step Mode or Step button.
 
 ## 2. UI criteria
 
@@ -33,26 +35,67 @@ The app shows:
 
 - Prompt input
 - Backend / Model selector
-- Step / Auto / Pause controls
-- Human Layer canvas
+- Run / Pause / Resume controls
+- Guide Canvas
 - Generated Image canvas
 - Snapshot Timeline
 - Generation settings
+- Guide settings
 - Noise Brush settings
 
 ### AC-UI-002: Settings
 
 The user can change:
 
-- Steps
 - CFG
 - Global Exploration Noise Strength
 - Local Rejection Strength
+- Guide Influence
 - Seed
 - Update Interval
 - Brush Size
 
-## 3. Runtime criteria
+### AC-UI-003: No Step Mode
+
+The UI must not expose a Step button or user-facing Step Mode.
+
+A private internal runtime tick function is allowed.
+
+## 3. Guide Canvas criteria
+
+### AC-GUIDE-001: Import Image
+
+User can import an image into Imported Image Layer.
+
+### AC-GUIDE-002: Draw
+
+Drawing on Human Draw Layer appears immediately.
+
+### AC-GUIDE-003: Separation
+
+Generated Image updates do not clear or change Guide Canvas.
+
+### AC-GUIDE-004: Clear Draw
+
+Clear Draw clears only Human Draw Layer. Imported Image remains.
+
+### AC-GUIDE-005: Guide Erase
+
+Guide Erase Mask hides parts of Imported Image non-destructively.
+
+### AC-GUIDE-006: Guide Composite
+
+The app can export or inspect Guide Composite.
+
+### AC-GUIDE-007: Guide-only import
+
+Import Image does not automatically reset runtime session or start Base Image Init Mode.
+
+### AC-GUIDE-008: Generated Image separation
+
+Guide Canvas operations do not directly modify Generated Image pixels.
+
+## 4. Runtime criteria
 
 ### AC-RUNTIME-001: Session
 
@@ -60,39 +103,29 @@ The runtime creates or simulates a session identified by sessionId.
 
 ### AC-RUNTIME-002: Stateful update
 
-Step and Auto call a runtime update against existing session state when session state exists.
+Run loop calls runtime update against existing session state when session state exists.
 
 ### AC-RUNTIME-003: Mock stateful behavior
 
 Mock runtime visibly or inspectably changes state across updates. It must not behave as a pure stateless final-image generator.
 
-### AC-RUNTIME-004: TinySD positioning
+### AC-RUNTIME-004: Backend positioning
 
-TinySD is treated as the first real stateful latent runtime candidate. It is not treated only as a distant future extension.
+The first working runtime must be Mock Stateful Runtime. Real runtime may be direct Diffusers/TinySD, ComfyUI adapter, InvokeAI fork/adapter, or another compatible adapter.
 
 ### AC-RUNTIME-005: Global exploration noise
 
 Explore updates apply low global exploration noise or a visible/inspectable mock equivalent.
 
-## 4. Human Layer criteria
+### AC-RUNTIME-006: Adapter semantics
 
-### AC-HL-001: Drawing
-
-Drawing on Human Layer appears immediately.
-
-### AC-HL-002: Separation
-
-Generated Image updates do not clear or change Human Layer.
-
-### AC-HL-003: Clear
-
-Clear Human Layer clears only Human Layer. Generated Image remains.
+Any fork or adapter must preserve Run loop, Guide Canvas, momentary Noise Brush, Snapshot, and stateful/simulated-state semantics.
 
 ## 5. Generation criteria
 
-### AC-GEN-001: Step
+### AC-GEN-001: Run
 
-When Prompt exists and Step is pressed, exactly one runtime update is attempted and Generated Image preview updates on success.
+When Prompt exists and Run is pressed, repeated runtime updates are attempted and Generated Image preview updates on success.
 
 ### AC-GEN-002: Status
 
@@ -104,7 +137,7 @@ When runtime fails, generationStatus becomes `error`, errorMessage is visible, a
 
 ### AC-GEN-004: Current state continuity
 
-When runtime state exists, Step and Auto use it as the base. The app must not always recreate from blank state.
+When runtime state exists, Run loop uses it as the base. The app must not always recreate from blank state.
 
 ### AC-GEN-005: requestId
 
@@ -112,7 +145,7 @@ Every request has a requestId, and every response includes the same requestId.
 
 ### AC-GEN-006: Prompt update policy
 
-Prompt changes during Auto Mode do not destroy the runtime session. They are applied from a later runtime update.
+Prompt changes during Run loop do not destroy the runtime session. They are applied from a later runtime update.
 
 ## 6. Noise Brush criteria
 
@@ -126,11 +159,11 @@ Brush Size changes the painted mask size.
 
 ### AC-NB-003: Active intervention inclusion
 
-When noiseBrushActive is true and activeNoiseMask exists, Step and Auto include it in DiffusionIntervention or the compatibility GenerationRequest.
+When noiseBrushActive is true and activeNoiseMask exists, Run loop includes it in DiffusionIntervention or the compatibility GenerationRequest.
 
-### AC-NB-004: Human Layer unchanged
+### AC-NB-004: Guide Canvas unchanged
 
-Noise Brush does not modify Human Layer.
+Noise Brush does not modify Guide Canvas.
 
 ### AC-NB-005: Local Rejection Strength meaning
 
@@ -143,11 +176,11 @@ Noise Brush means that the current local solution in the masked region is reject
 It must not be implemented as:
 
 - a normal erase operation
-- a direct Human Layer apply operation
+- a direct Guide Canvas apply operation
 
 ### AC-NB-007: Alternative search behavior
 
-While Noise Brush is active, future updates should attempt to move the masked region away from the previous local interpretation while remaining conditioned by Prompt, Human Layer, and surrounding runtime state.
+While Noise Brush is active, future updates should attempt to move the masked region away from the previous local interpretation while remaining conditioned by Prompt, Guide Composite, and surrounding runtime state.
 
 ### AC-NB-008: Momentary lifetime
 
@@ -157,29 +190,33 @@ When the user releases/cancels the brush interaction, noiseBrushActive becomes f
 
 After release, local rejection boost must stop. lastNoiseMask may remain only as debug/history/Snapshot metadata and must not be used as active intervention.
 
-## 7. Auto Loop criteria
+## 7. Run Loop criteria
 
-### AC-LOOP-001: Auto start
+### AC-LOOP-001: Run start
 
-Auto Mode attempts runtime updates every updateIntervalMs.
+Run starts repeated runtime updates every updateIntervalMs.
 
 ### AC-LOOP-002: Pause
 
 Pause stops new runtime requests.
 
-### AC-LOOP-003: UI remains usable
+### AC-LOOP-003: Resume
 
-During Auto Mode, the user can still draw Human Layer, hold/drag Noise Brush, save Snapshot, and press Pause.
+Resume restarts repeated updates from the current runtime state.
 
-### AC-LOOP-004: stale response protection
+### AC-LOOP-004: UI remains usable
+
+During Run loop, the user can still edit Guide Canvas, hold/drag Noise Brush, save Snapshot, and press Pause.
+
+### AC-LOOP-005: stale response protection
 
 If an old response returns late, it must not overwrite newer Generated Image state or runtime state.
 
 This can be implemented with requestId checking or single-flight request control.
 
-### AC-LOOP-005: Rolling intervention loop
+### AC-LOOP-006: Rolling intervention loop
 
-Auto Mode is a rolling intervention loop. It must not be implemented only as a forward-to-final-image process that stops the interaction after convergence.
+Run loop is a rolling intervention loop. It must not be implemented only as a forward-to-final-image process that stops the interaction after convergence.
 
 ## 8. Snapshot criteria
 
@@ -196,21 +233,26 @@ Snapshot stores at least:
 - selectedBackend
 - selectedModel
 - seed
-- steps
 - cfg
 - globalExplorationNoiseStrength
 - localRejectionStrength
+- guideInfluence
 - generatedImageDataUrl
 
-### AC-SNAP-002: Layer and metadata
+### AC-SNAP-002: Guide data and metadata
 
-If Human Layer exists, Snapshot stores humanLayerDataUrl.
+If present, Snapshot stores:
+
+- importedImageDataUrl
+- humanDrawLayerDataUrl
+- guideEraseMaskDataUrl
+- guideCompositeDataUrl
 
 If lastNoiseMask exists, Snapshot may store lastNoiseMaskDataUrl as metadata.
 
 ### AC-SNAP-003: Restore
 
-Restore Snapshot restores Generated Image and main generation settings.
+Restore Snapshot restores Generated Image, Guide Canvas data, and main generation settings.
 
 If runtime state is available, Restore may restore runtime state.
 
@@ -243,9 +285,10 @@ Finish from Snapshot uses selected Snapshot generatedImageDataUrl or saved runti
 Finish uses finish-oriented settings:
 
 ```text
-steps: 12-30
+updates: 12-30
 globalExplorationNoiseStrength: 0.00
 localRejectionStrength: 0.05-0.20
+guideInfluence: 0.3-0.7
 cfg: 3.0-6.0
 ```
 
@@ -253,15 +296,15 @@ cfg: 3.0-6.0
 
 Finish success updates Generated Image and can be saved as a new Snapshot.
 
-### AC-FIN-005: Finish stops Auto
+### AC-FIN-005: Finish stops Run
 
-Starting Finish from Snapshot stops Auto Mode and prevents concurrent Auto requests while Finish is running.
+Starting Finish from Snapshot stops Run loop and prevents concurrent Run loop requests while Finish is running.
 
 ## 10. Mock runtime criteria
 
 ### AC-MOCK-001: Works without real model
 
-The app supports Step, Auto, Snapshot, Restore, and Finish with Mock Stateful Runtime only.
+The app supports Run, Pause, Resume, Snapshot, Restore, and Finish with Mock Stateful Runtime only.
 
 ### AC-MOCK-002: Inspectable request
 
@@ -273,22 +316,22 @@ Mock runtime exposes or logs:
 - selectedBackend
 - selectedModel
 - seed
-- steps
 - cfg
+- guideInfluence
+- guideComposite presence
 - globalExplorationNoiseStrength
 - localRejectionStrength
 - noiseBrushActive
 - activeNoiseMask presence
-- humanLayer presence
 
 ## 11. Minimal demo
 
 ```text
 Open app
 → enter Prompt
-→ Step
-→ draw on Human Layer
-→ Auto
+→ import image into Guide Canvas
+→ draw/edit Guide Canvas
+→ Run
 → hold/drag Noise Brush over bad region
 → region changes while brush is active
 → release Noise Brush
@@ -302,18 +345,21 @@ Open app
 
 v0.1 is not complete if:
 
-- Human Layer disappears after Generated Image update.
-- Auto cannot be paused.
+- User-facing Step Mode or Step button exists.
+- Guide Canvas disappears after Generated Image update.
+- Run cannot be paused.
+- Resume does not continue from current state.
 - Snapshot cannot be restored.
-- Noise Brush changes Human Layer.
+- Noise Brush changes Guide Canvas.
 - Noise Brush is implemented as a normal eraser.
-- Noise Brush is implemented as direct local Human Layer application.
+- Noise Brush is implemented as direct local Guide Canvas application.
 - Noise Brush remains active after pointerup / touchend / cancel.
 - lastNoiseMask is restored as active rejection input.
+- Imported Image import automatically triggers Base Image Init Mode.
 - UI becomes unusable after runtime error.
 - Generated Image is always recreated from blank state without current-state continuity.
-- Auto has no global exploration noise or mock equivalent.
+- Run loop has no global exploration noise or mock equivalent.
 - old responses can overwrite newer state.
-- Model and Backend selection are ambiguous in state.
 - globalExplorationNoiseStrength and localRejectionStrength are conflated.
+- fork/adapter route turns the product into ordinary one-shot inpainting UI.
 - the runtime is specified only as a final-image generator.
