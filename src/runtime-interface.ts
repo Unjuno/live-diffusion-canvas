@@ -1,0 +1,3 @@
+export type DiffusionIntervention = { requestId:number; sessionId:string; prompt:string; guideComposite?:string; guideInfluence:number; globalExplorationNoiseStrength:number; noiseBrushActive:boolean; activeNoiseMask?:string; localRejectionStrength:number; updatesToAdvance:number; phase:'explore'|'finish' };
+export type DiffusionRuntimeResponse = { requestId:number; sessionId:string; previewImage:string; seed:number; latencyMs:number };
+export interface DiffusionRuntime { createSession(seed:number):Promise<string>; applyIntervention(input:DiffusionIntervention):Promise<DiffusionRuntimeResponse>; finish(input:DiffusionIntervention):Promise<DiffusionRuntimeResponse>; }

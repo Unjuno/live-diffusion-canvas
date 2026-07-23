@@ -1,33 +1,32 @@
 # Live Diffusion Canvas
 
-Live Diffusion Canvas is an SDD-first prototype for interacting with intermediate diffusion generation states.
+SDD-first prototype for exploring and steering intermediate diffusion states.
 
-## Core workflow
+## Run locally
 
-```text
-Prompt
-→ Human Layer
-→ Generated Image
-→ Noise Brush
-→ Snapshot
-→ Restore / Finish from Snapshot
+```bash
+npm install
+npm run dev
 ```
 
-The application is not centered on one-shot final-image generation. It is centered on exploring and steering intermediate states.
+Open the printed Vite URL. The current runtime is intentionally a Mock Stateful Runtime: it demonstrates session continuity, rolling updates, Guide Canvas input, momentary Noise Brush rejection, and Snapshot restore without requiring a GPU.
 
-## SDD source of truth
+## Verification
 
-Read the SDD documents under:
-
-```text
-docs/sdd/
+```bash
+npm test
+npm run build
 ```
 
-Start with:
+The browser-first app is structured so the same React UI can be packaged with Tauri and connected to a local FastAPI/Diffusers runtime. `segmind/tiny-sd` is the configured real local model on Apple MPS; the lightweight mock remains available for fast tests.
 
-1. `AGENTS.md`
-2. `docs/sdd/README.md`
-3. `docs/sdd/spec.md`
-4. `docs/sdd/architecture.md`
-5. `docs/sdd/tasks.md`
-6. `docs/sdd/acceptance.md`
+## Optional FastAPI runtime
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+uvicorn backend.app:app --reload --port 8000
+```
+
+The runtime exposes `/runtime/health`, `/runtime/session`, `/runtime/intervention`, and `/runtime/finish`. It is a stateful mock boundary until a GPU backend is selected.

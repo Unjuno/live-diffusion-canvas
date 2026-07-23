@@ -1,0 +1,8 @@
+node_modules/
+.venv/
+.venv-real/
+__pycache__/
+src-tauri/target/
+dist/
+*.tsbuildinfo
+.playwright-mcp/

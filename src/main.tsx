@@ -1,0 +1,546 @@
+import React, { useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { create } from "zustand";
+import "./styles.css";
+import "./real-model.css";
+import { makePreview } from "./runtime";
+import { loadSnapshots, persistSnapshot, type StoredSnapshot } from "./db";
+
+type LoopStatus = "idle" | "running" | "paused";
+type Snapshot = StoredSnapshot;
+type State = {
+  prompt: string;
+  backend: string;
+  model: string;
+  loopStatus: LoopStatus;
+  generationStatus: "idle" | "generating" | "error";
+  generationPhase: "explore" | "finish";
+  errorMessage: string | null;
+  guideInfluence: number;
+  globalNoise: number;
+  localRejection: number;
+  brushSize: number;
+  updateInterval: number;
+  seed: number;
+  generatedImage: string | null;
+  guideImage: string | null;
+  drawPoints: [number, number][];
+  guideEraseMask: string | null;
+  guideComposite: string | null;
+  noiseBrushActive: boolean;
+  activeNoiseMask: [number, number][];
+  lastNoiseMask: [number, number][];
+  runtimeSessionId: string | null;
+  snapshots: Snapshot[];
+  tick: number;
+  diffusionStep: number;
+  diffusionSteps: number;
+  run(): void;
+  pause(): void;
+  resume(): void;
+  tickOnce(): Promise<void>;
+  saveSnapshot(): void;
+  finish(snapshot: Snapshot): void;
+};
+
+let runtimeRequestInFlight = false;
+
+const useApp = create<State>((set, get) => ({
+  prompt: "a quiet architectural landscape at blue hour",
+  backend: "mock",
+  model: "mock-stateful-v0.1",
+  loopStatus: "idle",
+  generationStatus: "idle",
+  generationPhase: "explore",
+  errorMessage: null,
+  guideInfluence: 0.5,
+  globalNoise: 0.04,
+  localRejection: 0.7,
+  brushSize: 34,
+  updateInterval: 1200,
+  seed: 42,
+  generatedImage: null,
+  guideImage: null,
+  drawPoints: [],
+  guideEraseMask: null,
+  guideComposite: null,
+  noiseBrushActive: false,
+  activeNoiseMask: [],
+  lastNoiseMask: [],
+  runtimeSessionId: null,
+  snapshots: [],
+  tick: 0,
+  diffusionStep: 0,
+  diffusionSteps: 0,
+  run: () =>
+    set({
+      loopStatus: "running",
+      generationPhase: "explore",
+      errorMessage: null,
+    }),
+  pause: () => set({ loopStatus: "paused" }),
+  resume: () => set({ loopStatus: "running" }),
+  tickOnce: async () => {
+    if (runtimeRequestInFlight) return;
+    runtimeRequestInFlight = true;
+    const s = get();
+    const tick = s.tick + 1;
+    set({ generationStatus: "generating" });
+    try {
+      if (s.backend === "mock") {
+        set({
+          tick,
+          generatedImage: makePreview(tick, s.seed, s.noiseBrushActive),
+          generationStatus: "idle",
+          errorMessage: null,
+        });
+        return;
+      }
+      let sessionId = s.runtimeSessionId;
+      if (!sessionId) {
+        const session = await fetch("http://127.0.0.1:8000/runtime/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seed: s.seed }),
+        }).then((r) => r.json());
+        sessionId = session.sessionId;
+        set({ runtimeSessionId: sessionId });
+      }
+      const response = await fetch(
+        "http://127.0.0.1:8000/runtime/intervention",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId: tick,
+            sessionId,
+            prompt: s.prompt,
+            guideComposite: s.guideComposite,
+            guideInfluence: s.guideInfluence,
+            globalExplorationNoiseStrength: s.globalNoise,
+            noiseBrushActive: s.noiseBrushActive,
+            activeNoiseMask: s.activeNoiseMask.length
+              ? JSON.stringify(s.activeNoiseMask)
+              : null,
+            localRejectionStrength: s.localRejection,
+            updatesToAdvance: 1,
+            phase: "explore",
+          }),
+        },
+      ).then(async (r) => {
+        if (!r.ok) throw new Error(`Runtime HTTP ${r.status}`);
+        return r.json();
+      });
+      set({
+        tick,
+        generatedImage: response.previewImage,
+        diffusionStep: response.diffusionStep ?? 0,
+        diffusionSteps: response.diffusionSteps ?? 0,
+        generationStatus: "idle",
+        errorMessage: null,
+      });
+    } catch (error) {
+      set({
+        generationStatus: "error",
+        errorMessage:
+          error instanceof Error ? error.message : "Runtime unavailable",
+        loopStatus: "paused",
+      });
+    } finally {
+      runtimeRequestInFlight = false;
+    }
+  },
+  saveSnapshot: () => {
+    const s = get();
+    if (!s.generatedImage) return;
+    const snapshot = {
+      id: crypto.randomUUID(),
+      createdAt: Date.now(),
+      generatedImage: s.generatedImage,
+      prompt: s.prompt,
+      note: `Explore update ${s.tick}`,
+      importedImage: s.guideImage ?? undefined,
+      humanDrawLayer: s.drawPoints,
+      guideEraseMask: s.guideEraseMask ?? undefined,
+      guideComposite: s.guideComposite ?? undefined,
+      lastNoiseMask: s.lastNoiseMask,
+    };
+    void persistSnapshot(snapshot);
+    set({ snapshots: [...s.snapshots, snapshot] });
+  },
+  finish: (snapshot) => {
+    set({
+      loopStatus: "paused",
+      generationStatus: "generating",
+      generationPhase: "finish",
+      generatedImage: makePreview(get().tick + 1, get().seed, false),
+    });
+    window.setTimeout(
+      () =>
+        set({
+          generationStatus: "idle",
+          prompt: snapshot.prompt,
+          tick: get().tick + 1,
+        }),
+      180,
+    );
+  },
+}));
+
+function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <label className="slider">
+      <span>
+        {label}
+        <b>{value}</b>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </label>
+  );
+}
+function Canvas({ guide = false }: { guide?: boolean }) {
+  const s = useApp();
+  const ref = useRef<HTMLDivElement>(null);
+  const [drawing, setDrawing] = useState(false);
+  const points = guide ? s.drawPoints : s.activeNoiseMask;
+  const add = (e: React.PointerEvent) => {
+    if (!drawing) return;
+    const r = ref.current!.getBoundingClientRect();
+    const p: [number, number] = [
+      ((e.clientX - r.left) / r.width) * 100,
+      ((e.clientY - r.top) / r.height) * 100,
+    ];
+    if (guide)
+      useApp.setState({ drawPoints: [...useApp.getState().drawPoints, p] });
+    else
+      useApp.setState({
+        activeNoiseMask: [...useApp.getState().activeNoiseMask, p],
+        noiseBrushActive: true,
+      });
+  };
+  const release = () => {
+    setDrawing(false);
+    if (!guide) {
+      const mask = useApp.getState().activeNoiseMask;
+      if (mask.length) {
+        // Submit the completed stroke while its mask is still active. Clearing
+        // it before tickOnce() made the real backend receive no brush input.
+        useApp.setState({ noiseBrushActive: true });
+        const submit = () => {
+          if (runtimeRequestInFlight) {
+            window.setTimeout(submit, 100);
+            return;
+          }
+          void useApp.getState().tickOnce().finally(() => {
+          useApp.setState({
+            noiseBrushActive: false,
+            activeNoiseMask: [],
+            lastNoiseMask: mask,
+          });
+          });
+        };
+        submit();
+      } else {
+        useApp.setState({ noiseBrushActive: false, activeNoiseMask: [] });
+      }
+    }
+  };
+  return (
+    <div
+      ref={ref}
+      className={`canvas ${guide ? "guide-canvas" : "generated-canvas"}`}
+      onPointerDown={(e) => {
+        setDrawing(true);
+        ref.current?.setPointerCapture(e.pointerId);
+        add(e);
+      }}
+      onPointerMove={add}
+      onPointerUp={release}
+      onPointerCancel={release}
+    >
+      {!guide && s.generatedImage && (
+        <img src={s.generatedImage} alt="Generated state preview" />
+      )}
+      {guide && s.guideImage && <img src={s.guideImage} alt="Imported guide" />}
+      <div className="grid" />
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+        {points.length > 1 && (
+          <polyline
+            points={points.map((p) => p.join(",")).join(" ")}
+            fill="none"
+            stroke={guide ? "#ffc857" : "#ff6b6b"}
+            strokeWidth={guide ? "1.2" : "2"}
+            strokeLinecap="round"
+          />
+        )}
+      </svg>
+      <div className="canvas-label">
+        {guide ? "DRAW GUIDE" : "HOLD TO REJECT"}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const s = useApp();
+  useEffect(() => {
+    if (s.loopStatus !== "running") return;
+    const id = window.setInterval(
+      () => void useApp.getState().tickOnce(),
+      s.updateInterval,
+    );
+    return () => clearInterval(id);
+  }, [s.loopStatus, s.updateInterval]);
+  return (
+    <main>
+      <header>
+        <div>
+          <div className="eyebrow">STATEFUL DIFFUSION RUNTIME · v0.1</div>
+          <h1>
+            Live Diffusion <em>Canvas</em>
+          </h1>
+        </div>
+        <div className="runtime">
+          <span className="dot" /> {s.loopStatus.toUpperCase()}{" "}
+          <small>SESSION {s.tick ? `mock-${s.seed}` : "—"}</small>
+        </div>
+      </header>
+      <section className="toolbar">
+        <input
+          aria-label="Prompt"
+          value={s.prompt}
+          onChange={(e) => useApp.setState({ prompt: e.target.value })}
+        />
+        <select
+          aria-label="Backend"
+          value={s.backend}
+          onChange={(e) => useApp.setState({ backend: e.target.value })}
+        >
+          <option value="mock">Mock Runtime</option>
+          <option value="tinysd">TinySD (planned)</option>
+        </select>
+        <button className="primary" onClick={s.run}>
+          Run
+        </button>
+        <button onClick={s.pause}>Pause</button>
+        <button onClick={s.resume}>Resume</button>
+      </section>
+      <div className="workspace">
+        <section className="panel">
+          <div className="panel-head">
+            <span>01 / GUIDE CANVAS</span>
+            <button onClick={() => useApp.setState({ drawPoints: [] })}>
+              Clear draw
+            </button>
+          </div>
+          <Canvas guide />
+          <p className="hint">
+            Draw a positive guide. Imported images remain separate from the
+            generated state.
+          </p>
+          <label className="upload">
+            ＋ Import guide image
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  const r = new FileReader();
+                  r.onload = () =>
+                    useApp.setState({ guideImage: String(r.result) });
+                  r.readAsDataURL(f);
+                }
+              }}
+            />
+          </label>
+        </section>
+        <section className="panel">
+          <div className="panel-head">
+            <span>02 / GENERATED STATE</span>
+            <span className="live">● LIVE PREVIEW</span>
+          </div>
+          <Canvas />
+          <p className="hint">
+            Hold and drag to reject a local solution. It only applies while
+            pressed.
+          </p>
+        </section>
+        <aside className="side">
+          <section className="panel">
+            <div className="panel-head">
+              <span>RUNTIME SETTINGS</span>
+            </div>
+            <Slider
+              label="Guide influence"
+              value={s.guideInfluence}
+              min={0}
+              max={1}
+              step={0.05}
+              onChange={(v) => useApp.setState({ guideInfluence: v })}
+            />
+            <Slider
+              label="Global exploration"
+              value={s.globalNoise}
+              min={0}
+              max={0.1}
+              step={0.01}
+              onChange={(v) => useApp.setState({ globalNoise: v })}
+            />
+            <Slider
+              label="Local rejection"
+              value={s.localRejection}
+              min={0}
+              max={1}
+              step={0.05}
+              onChange={(v) => useApp.setState({ localRejection: v })}
+            />
+            <Slider
+              label="Brush size"
+              value={s.brushSize}
+              min={10}
+              max={80}
+              step={2}
+              onChange={(v) => useApp.setState({ brushSize: v })}
+            />
+            <div className="mini-fields">
+              <label>
+                Seed
+                <input
+                  type="number"
+                  value={s.seed}
+                  onChange={(e) =>
+                    useApp.setState({ seed: Number(e.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Interval
+                <input
+                  type="number"
+                  value={s.updateInterval}
+                  onChange={(e) =>
+                    useApp.setState({ updateInterval: Number(e.target.value) })
+                  }
+                />
+              </label>
+            </div>
+          </section>
+          <section className="panel snapshots">
+            <div className="panel-head">
+              <span>SNAPSHOT TIMELINE</span>
+              <button onClick={s.saveSnapshot}>Save</button>
+            </div>
+            {s.snapshots.length === 0 ? (
+              <div className="empty">
+                Run the canvas, then save a state to branch from it.
+              </div>
+            ) : (
+              s.snapshots.map((x, i) => (
+                <div className="snapshot" key={x.id}>
+                  <img src={x.generatedImage} />
+                  <div>
+                    <b>Snapshot {String(i + 1).padStart(2, "0")}</b>
+                    <small>{x.note}</small>
+                  </div>
+                  <button
+                    onClick={() =>
+                      useApp.setState({
+                        generatedImage: x.generatedImage,
+                        prompt: x.prompt,
+                        loopStatus: "paused",
+                      })
+                    }
+                  >
+                    Restore
+                  </button>
+                </div>
+              ))
+            )}
+          </section>
+        </aside>
+      </div>
+      <footer>
+        <span>
+          Explore is rolling · global noise {s.globalNoise.toFixed(2)} · guide{" "}
+          {Math.round(s.guideInfluence * 100)}%
+        </span>
+          <span>
+            Updates: {s.tick}
+            {s.backend === "tinysd" && s.diffusionSteps > 0
+              ? ` · Diffusion step ${s.diffusionStep}/${s.diffusionSteps}`
+              : ""}
+          </span>
+      </footer>
+    </main>
+  );
+}
+function PersistenceBootstrap() {
+  const s = useApp();
+  useEffect(() => {
+    void loadSnapshots().then((snapshots) => useApp.setState({ snapshots }));
+  }, []);
+  const latest = s.snapshots[s.snapshots.length - 1];
+  const finish = () => {
+    if (latest) useApp.getState().finish(latest);
+  };
+  const restore = () => {
+    if (latest)
+      useApp.setState({
+        generatedImage: latest.generatedImage,
+        prompt: latest.prompt,
+        guideImage: latest.importedImage ?? null,
+        drawPoints: latest.humanDrawLayer ?? [],
+        guideEraseMask: latest.guideEraseMask ?? null,
+        guideComposite: latest.guideComposite ?? null,
+        noiseBrushActive: false,
+        activeNoiseMask: [],
+        loopStatus: "paused",
+      });
+  };
+  return (
+    <>
+      {s.errorMessage && (
+        <div className="runtime-error">Runtime error: {s.errorMessage}</div>
+      )}
+      <span className="real-model-badge">
+        Real model route: segmind/tiny-sd · MPS
+      </span>
+      <div className="snapshot-actions">
+        <button onClick={restore} disabled={!latest}>
+          Restore latest
+        </button>
+        <button onClick={finish} disabled={!latest}>
+          Finish latest
+        </button>
+      </div>
+    </>
+  );
+}
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <PersistenceBootstrap />
+    <App />
+  </React.StrictMode>,
+);
