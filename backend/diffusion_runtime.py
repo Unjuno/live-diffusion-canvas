@@ -87,9 +87,16 @@ class TinySDRuntime:
                             x = min(max(int(float(point[0]) / 100 * mask.shape[-1]), 0), mask.shape[-1] - 1)
                             y = min(max(int(float(point[1]) / 100 * mask.shape[-2]), 0), mask.shape[-2] - 1)
                             mask[:, :, max(0, y - 2):min(mask.shape[-2], y + 3), max(0, x - 2):min(mask.shape[-1], x + 3)] = 1
-                    state.latents = state.latents * (1 - mask) + torch.randn_like(state.latents) * min(float(rejection_strength), 1.0) * mask
+                    # Re-noise with the scheduler so the latent remains in
+                    # the model's expected scale; replacing it with raw noise
+                    # produces near-black previews after intervention.
+                    restart_noise = torch.randn_like(state.latents)
+                    renoised = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[0].reshape(1))
+                    alpha = min(float(rejection_strength), 1.0)
+                    state.latents = state.latents * (1 - mask * alpha) + renoised * (mask * alpha)
                 else:
-                    state.latents = state.latents + torch.randn_like(state.latents) * min(float(exploration_strength), 1.0)
+                    restart_noise = torch.randn_like(state.latents)
+                    state.latents = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[0].reshape(1))
                 pipe.scheduler.set_timesteps(len(state.timesteps), device=self.device)
                 state.timesteps = pipe.scheduler.timesteps.detach().clone()
                 state.step_index = 0
@@ -109,6 +116,8 @@ class TinySDRuntime:
                         x = min(max(int(float(point[0]) / 100 * mask.shape[-1]), 0), mask.shape[-1] - 1)
                         y = min(max(int(float(point[1]) / 100 * mask.shape[-2]), 0), mask.shape[-2] - 1)
                         mask[:, :, max(0, y - 2):min(mask.shape[-2], y + 3), max(0, x - 2):min(mask.shape[-1], x + 3)] = 1
-                state.latents = state.latents * (1 - mask) + torch.randn_like(state.latents) * min(float(rejection_strength), 1.0) * mask
+                # Keep an intervention local and bounded while preserving the
+                # surrounding latent solution.
+                state.latents = state.latents + torch.randn_like(state.latents) * min(float(rejection_strength), 1.0) * 0.15 * mask
             state.step_index += 1
             return self._preview(pipe, state.latents), round((time.perf_counter() - started) * 1000), state.step_index
