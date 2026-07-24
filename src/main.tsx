@@ -35,6 +35,7 @@ type State = {
   tick: number;
   diffusionStep: number;
   diffusionSteps: number;
+  diffusionStepCount: number;
   run(): void;
   pause(): void;
   resume(): void;
@@ -72,6 +73,7 @@ const useApp = create<State>((set, get) => ({
   tick: 0,
   diffusionStep: 0,
   diffusionSteps: 0,
+  diffusionStepCount: 8,
   run: () =>
     set({
       loopStatus: "running",
@@ -125,6 +127,7 @@ const useApp = create<State>((set, get) => ({
             localRejectionStrength: s.localRejection,
             updatesToAdvance: 1,
             phase: "explore",
+            diffusionSteps: s.diffusionStepCount,
           }),
         },
       ).then(async (r) => {
@@ -423,6 +426,14 @@ function App() {
               max={80}
               step={2}
               onChange={(v) => useApp.setState({ brushSize: v })}
+            />
+            <Slider
+              label="Diffusion steps"
+              value={s.diffusionStepCount}
+              min={4}
+              max={20}
+              step={1}
+              onChange={(v) => useApp.setState({ diffusionStepCount: v })}
             />
             <div className="mini-fields">
               <label>

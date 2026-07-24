@@ -37,6 +37,7 @@ class Intervention(BaseModel):
     localRejectionStrength: float = Field(0.7, ge=0, le=1)
     updatesToAdvance: int = Field(1, ge=1, le=3)
     phase: str = "explore"
+    diffusionSteps: int = Field(8, ge=4, le=20)
 
 
 class RuntimeResponse(BaseModel):
@@ -89,8 +90,8 @@ def intervention(request: Intervention) -> RuntimeResponse:
                     rejection_mask = json.loads(request.activeNoiseMask)
                 except json.JSONDecodeError:
                     rejection_mask = None
-            if session.real_state is None or session.real_state.prompt != request.prompt:
-                session.real_state = real_runtime.start(request.prompt, session.seed)
+            if session.real_state is None or session.real_state.prompt != request.prompt or len(session.real_state.timesteps) != request.diffusionSteps:
+                session.real_state = real_runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps)
             image, latency_ms, step = real_runtime.advance(session.real_state, rejection_mask=rejection_mask, rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0, exploration_strength=request.globalExplorationNoiseStrength)
         return RuntimeResponse(requestId=request.requestId, sessionId=request.sessionId, previewImage=image, seed=session.seed, latencyMs=latency_ms, diffusionStep=step, diffusionSteps=len(session.real_state.timesteps))
     accent = "f06b5d" if request.noiseBrushActive and request.activeNoiseMask else "7c5cff"
