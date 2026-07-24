@@ -119,5 +119,8 @@ class TinySDRuntime:
                 # Keep an intervention local and bounded while preserving the
                 # surrounding latent solution.
                 state.latents = state.latents + torch.randn_like(state.latents) * min(float(rejection_strength), 1.0) * 0.15 * mask
+            # A malformed/overstrong intervention must not poison the VAE
+            # decode and turn the entire preview black.
+            state.latents = torch.nan_to_num(state.latents, nan=0.0, posinf=4.0, neginf=-4.0).clamp(-4.0, 4.0)
             state.step_index += 1
             return self._preview(pipe, state.latents), round((time.perf_counter() - started) * 1000), state.step_index
