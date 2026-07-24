@@ -91,15 +91,19 @@ class TinySDRuntime:
                     # the model's expected scale; replacing it with raw noise
                     # produces near-black previews after intervention.
                     restart_noise = torch.randn_like(state.latents)
-                    renoised = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[0].reshape(1))
+                    # Re-open near the current terminal state, not from the
+                    # high-noise initial timestep the user already explored.
+                    restart_index = max(len(state.timesteps) - 2, 0)
+                    renoised = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[restart_index].reshape(1))
                     alpha = min(float(rejection_strength), 1.0)
                     state.latents = state.latents * (1 - mask * alpha) + renoised * (mask * alpha)
                 else:
                     restart_noise = torch.randn_like(state.latents)
-                    state.latents = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[0].reshape(1))
+                    restart_index = max(len(state.timesteps) - 2, 0)
+                    state.latents = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[restart_index].reshape(1))
                 pipe.scheduler.set_timesteps(len(state.timesteps), device=self.device)
                 state.timesteps = pipe.scheduler.timesteps.detach().clone()
-                state.step_index = 0
+                state.step_index = restart_index
             timestep = state.timesteps[state.step_index]
             latent_input = torch.cat([state.latents] * 2)
             latent_input = pipe.scheduler.scale_model_input(latent_input, timestep)
