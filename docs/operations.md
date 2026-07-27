@@ -25,7 +25,7 @@ Terminal 2:
 ./scripts/run-web.sh
 ```
 
-Select `TinySD (planned)` to exercise the HTTP runtime boundary. The default route uses the stateful mock adapter; the real route is enabled with `DIFFUSION_REAL=1`.
+Select `TinySD · local Diffusers` to use the real local model. The default route uses the stateful mock adapter; the real route is enabled with `DIFFUSION_REAL=1`.
 
 ## Real local image generation
 

@@ -90,8 +90,8 @@ def intervention(request: Intervention) -> RuntimeResponse:
                     rejection_mask = json.loads(request.activeNoiseMask)
                 except json.JSONDecodeError:
                     rejection_mask = None
-            if session.real_state is None or session.real_state.prompt != request.prompt or len(session.real_state.timesteps) != request.diffusionSteps:
-                session.real_state = real_runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps)
+            if session.real_state is None or session.real_state.prompt != request.prompt or len(session.real_state.timesteps) != request.diffusionSteps or session.real_state.guide_composite != request.guideComposite or session.real_state.guide_influence != request.guideInfluence:
+                session.real_state = real_runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps, guide_composite=request.guideComposite, guide_influence=request.guideInfluence)
             image, latency_ms, step = real_runtime.advance(session.real_state, rejection_mask=rejection_mask, rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0, exploration_strength=request.globalExplorationNoiseStrength)
             if request.phase == "finish":
                 while step < len(session.real_state.timesteps):

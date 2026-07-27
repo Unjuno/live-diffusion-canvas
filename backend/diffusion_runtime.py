@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
+from urllib.parse import unquote
 import threading
 import time
 from dataclasses import dataclass
@@ -18,6 +20,9 @@ class DiffusionState:
     prompt_embeds: torch.Tensor
     negative_prompt_embeds: torch.Tensor
     timesteps: torch.Tensor
+    guide_mask: torch.Tensor | None = None
+    guide_influence: float = 0.0
+    guide_composite: str | None = None
     step_index: int = 0
 
 
@@ -42,7 +47,24 @@ class TinySDRuntime:
             self._pipe.set_progress_bar_config(disable=True)
         return self._pipe
 
-    def start(self, prompt: str, seed: int, steps: int = 8, guidance_scale: float = 7.5) -> DiffusionState:
+    def _guide_mask(self, composite: str | None, height: int, width: int) -> torch.Tensor | None:
+        if not composite:
+            return None
+        decoded = unquote(composite.split(",", 1)[1] if "," in composite else composite)
+        match = re.search(r'points="([^"]+)', decoded)
+        if not match:
+            return None
+        mask = torch.zeros((1, 1, height, width), device=self.device, dtype=self.dtype)
+        for point in match.group(1).split():
+            values = point.split(",")
+            if len(values) < 2:
+                continue
+            x = min(max(int(float(values[0]) / 100 * width), 0), width - 1)
+            y = min(max(int(float(values[1]) / 100 * height), 0), height - 1)
+            mask[:, :, max(0, y - 3):min(height, y + 4), max(0, x - 3):min(width, x + 4)] = 1
+        return mask
+
+    def start(self, prompt: str, seed: int, steps: int = 8, guidance_scale: float = 7.5, guide_composite: str | None = None, guide_influence: float = 0.0) -> DiffusionState:
         del guidance_scale  # guidance is applied in advance; kept in the public contract.
         with self._lock:
             pipe = self._pipeline()
@@ -61,7 +83,8 @@ class TinySDRuntime:
                 self.dtype, self.device, generator,
             )
             pipe.scheduler.set_timesteps(steps, device=self.device)
-            return DiffusionState(prompt, latents, positive, negative, pipe.scheduler.timesteps.detach().clone())
+            guide_mask = self._guide_mask(guide_composite, latents.shape[-2], latents.shape[-1])
+            return DiffusionState(prompt, latents, positive, negative, pipe.scheduler.timesteps.detach().clone(), guide_mask, guide_influence, guide_composite)
 
     def _preview(self, pipe, latents: torch.Tensor) -> str:
         with torch.no_grad():
@@ -113,6 +136,11 @@ class TinySDRuntime:
             uncond, text = noise.chunk(2)
             noise = uncond + 7.5 * (text - uncond)
             state.latents = pipe.scheduler.step(noise, timestep, state.latents, return_dict=False)[0]
+            if state.guide_mask is not None and state.guide_influence > 0:
+                # TinySD has no ControlNet; apply the Guide as a bounded
+                # spatial latent bias so the submitted guide has a real,
+                # observable effect without destabilising the image.
+                state.latents = state.latents + state.guide_mask * min(state.guide_influence, 1.0) * 0.02
             if rejection_mask and rejection_strength > 0:
                 mask = torch.zeros((1, 1, state.latents.shape[-2], state.latents.shape[-1]), device=state.latents.device, dtype=state.latents.dtype)
                 for point in rejection_mask:
