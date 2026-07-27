@@ -46,6 +46,19 @@ npm test
 npm run build
 ```
 
+## Real-runtime regression images
+
+With the real FastAPI runtime running, generate the fixed interaction scenario
+and inspect `artifacts/regression/00-contact-sheet.png`:
+
+```bash
+.venv-real/bin/python scripts/regression-real-runtime.py
+```
+
+The script compares Prompt, Guide, Noise Brush, and continued exploration
+against the same-seed baseline. It fails on near-identical interaction output,
+dark previews, or a stalled diffusion step.
+
 ## Desktop packaging decision
 
 Tauri is the selected desktop shell because the UI is Vite-based and the runtime is local. Run `npm run tauri dev` for desktop development or `npm run tauri build` to create a bundle. FastAPI remains a separately launched local runtime in this first shell.
