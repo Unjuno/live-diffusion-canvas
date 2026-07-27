@@ -109,7 +109,7 @@ class TinySDRuntime:
                         if len(point) >= 2:
                             x = min(max(int(float(point[0]) / 100 * mask.shape[-1]), 0), mask.shape[-1] - 1)
                             y = min(max(int(float(point[1]) / 100 * mask.shape[-2]), 0), mask.shape[-2] - 1)
-                            mask[:, :, max(0, y - 2):min(mask.shape[-2], y + 3), max(0, x - 2):min(mask.shape[-1], x + 3)] = 1
+                            mask[:, :, max(0, y - 3):min(mask.shape[-2], y + 4), max(0, x - 3):min(mask.shape[-1], x + 4)] = 1
                     # Re-noise with the scheduler so the latent remains in
                     # the model's expected scale; replacing it with raw noise
                     # produces near-black previews after intervention.
@@ -148,9 +148,14 @@ class TinySDRuntime:
                         x = min(max(int(float(point[0]) / 100 * mask.shape[-1]), 0), mask.shape[-1] - 1)
                         y = min(max(int(float(point[1]) / 100 * mask.shape[-2]), 0), mask.shape[-2] - 1)
                         mask[:, :, max(0, y - 2):min(mask.shape[-2], y + 3), max(0, x - 2):min(mask.shape[-1], x + 3)] = 1
-                # Keep an intervention local and bounded while preserving the
-                # surrounding latent solution.
-                state.latents = state.latents + torch.randn_like(state.latents) * min(float(rejection_strength), 1.0) * 0.15 * mask
+                # Re-noise at the current scheduler timestep. This pushes the
+                # brushed area out of its current basin more decisively while
+                # preserving the surrounding latent solution.
+                current_noise = torch.randn_like(state.latents)
+                current_timestep = state.timesteps[state.step_index].reshape(1)
+                renoised = pipe.scheduler.add_noise(state.latents, current_noise, current_timestep)
+                alpha = min(0.45 + float(rejection_strength) * 0.45, 0.9)
+                state.latents = state.latents * (1 - mask * alpha) + renoised * (mask * alpha)
             # A malformed/overstrong intervention must not poison the VAE
             # decode and turn the entire preview black.
             state.latents = torch.nan_to_num(state.latents, nan=0.0, posinf=4.0, neginf=-4.0).clamp(-4.0, 4.0)
