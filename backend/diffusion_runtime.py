@@ -140,7 +140,7 @@ class TinySDRuntime:
                 # TinySD has no ControlNet; apply the Guide as a bounded
                 # spatial latent bias so the submitted guide has a real,
                 # observable effect without destabilising the image.
-                state.latents = state.latents + state.guide_mask * min(state.guide_influence, 1.0) * 0.02
+                state.latents = state.latents + state.guide_mask * min(state.guide_influence, 1.0) * 0.12
             if rejection_mask and rejection_strength > 0:
                 mask = torch.zeros((1, 1, state.latents.shape[-2], state.latents.shape[-1]), device=state.latents.device, dtype=state.latents.dtype)
                 for point in rejection_mask:
