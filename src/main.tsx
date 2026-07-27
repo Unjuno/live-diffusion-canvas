@@ -43,6 +43,7 @@ type State = {
   resume(): void;
   tickOnce(): Promise<void>;
   saveSnapshot(): Promise<void>;
+  restoreSnapshot(snapshot: Snapshot): Promise<void>;
   finish(snapshot: Snapshot): Promise<void>;
 };
 
@@ -186,6 +187,41 @@ const useApp = create<State>((set, get) => ({
     };
     void persistSnapshot(snapshot);
     set({ snapshots: [...s.snapshots, snapshot] });
+  },
+  restoreSnapshot: async (snapshot) => {
+    const s = get();
+    let generatedImage = snapshot.generatedImage;
+    let diffusionStep = s.diffusionStep;
+    let diffusionSteps = s.diffusionSteps;
+    if (s.backend === "tinysd" && snapshot.runtimeSnapshotId && s.runtimeSessionId === snapshot.runtimeSessionId) {
+      const response = await fetch(`${RUNTIME_URL}/runtime/snapshot/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: s.runtimeSessionId, snapshotId: snapshot.runtimeSnapshotId }),
+      });
+      if (!response.ok) throw new Error(`Restore HTTP ${response.status}`);
+      const runtimeSnapshot = await response.json();
+      generatedImage = runtimeSnapshot.previewImage;
+      diffusionStep = runtimeSnapshot.diffusionStep;
+      diffusionSteps = runtimeSnapshot.diffusionSteps;
+    }
+    set({
+      generatedImage,
+      prompt: snapshot.prompt,
+      guideImage: snapshot.importedImage ?? null,
+      drawPoints: snapshot.humanDrawLayer ?? [],
+      guideEraseMask: snapshot.guideEraseMask ?? null,
+      guideErasePoints: snapshot.guideEraseMask ? JSON.parse(snapshot.guideEraseMask) : [],
+      guideComposite: snapshot.guideComposite ?? null,
+      diffusionStepCount: snapshot.diffusionStepCount ?? s.diffusionStepCount,
+      seed: snapshot.seed ?? s.seed,
+      diffusionStep,
+      diffusionSteps,
+      noiseBrushActive: false,
+      activeNoiseMask: [],
+      loopStatus: "paused",
+      errorMessage: null,
+    });
   },
   finish: async (snapshot) => {
     set({
@@ -523,13 +559,7 @@ function App() {
                     <small>{x.note}</small>
                   </div>
                   <button
-                    onClick={() =>
-                      useApp.setState({
-                        generatedImage: x.generatedImage,
-                        prompt: x.prompt,
-                        loopStatus: "paused",
-                      })
-                    }
+                    onClick={() => void useApp.getState().restoreSnapshot(x)}
                   >
                     Restore
                   </button>
@@ -567,36 +597,7 @@ function PersistenceBootstrap() {
     if (latest) useApp.getState().finish(latest);
   };
   const restore = async () => {
-    if (latest) {
-      let generatedImage = latest.generatedImage;
-      let diffusionStep = useApp.getState().diffusionStep;
-      let diffusionSteps = useApp.getState().diffusionSteps;
-      const sessionId = useApp.getState().runtimeSessionId;
-      if (latest.runtimeSnapshotId && sessionId) {
-        const response = await fetch(`${RUNTIME_URL}/runtime/snapshot/restore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, snapshotId: latest.runtimeSnapshotId }) });
-        if (!response.ok) throw new Error(`Restore HTTP ${response.status}`);
-        const runtimeSnapshot = await response.json();
-        generatedImage = runtimeSnapshot.previewImage;
-        diffusionStep = runtimeSnapshot.diffusionStep;
-        diffusionSteps = runtimeSnapshot.diffusionSteps;
-      }
-      useApp.setState({
-        generatedImage,
-        prompt: latest.prompt,
-        guideImage: latest.importedImage ?? null,
-        drawPoints: latest.humanDrawLayer ?? [],
-        guideEraseMask: latest.guideEraseMask ?? null,
-        guideErasePoints: latest.guideEraseMask ? JSON.parse(latest.guideEraseMask) : [],
-        guideComposite: latest.guideComposite ?? null,
-        diffusionStepCount: latest.diffusionStepCount ?? s.diffusionStepCount,
-        seed: latest.seed ?? s.seed,
-        diffusionStep,
-        diffusionSteps,
-        noiseBrushActive: false,
-        activeNoiseMask: [],
-        loopStatus: "paused",
-      });
-    }
+    if (latest) await useApp.getState().restoreSnapshot(latest);
   };
   return (
     <>
