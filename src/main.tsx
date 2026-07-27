@@ -25,6 +25,8 @@ type State = {
   generatedImage: string | null;
   guideImage: string | null;
   drawPoints: [number, number][];
+  guideErasePoints: [number, number][];
+  guideMode: "draw" | "erase";
   guideEraseMask: string | null;
   guideComposite: string | null;
   noiseBrushActive: boolean;
@@ -64,6 +66,8 @@ const useApp = create<State>((set, get) => ({
   generatedImage: null,
   guideImage: null,
   drawPoints: [],
+  guideErasePoints: [],
+  guideMode: "draw",
   guideEraseMask: null,
   guideComposite: null,
   noiseBrushActive: false,
@@ -231,7 +235,7 @@ function Canvas({ guide = false }: { guide?: boolean }) {
   const s = useApp();
   const ref = useRef<HTMLDivElement>(null);
   const [drawing, setDrawing] = useState(false);
-  const points = guide ? s.drawPoints : s.activeNoiseMask;
+  const points = guide ? s.drawPoints.filter(([x, y]) => s.guideErasePoints.every(([ex, ey]) => Math.hypot(x - ex, y - ey) > 8)) : s.activeNoiseMask;
   const add = (e: React.PointerEvent) => {
     if (!drawing) return;
     const r = ref.current!.getBoundingClientRect();
@@ -240,7 +244,16 @@ function Canvas({ guide = false }: { guide?: boolean }) {
       ((e.clientY - r.top) / r.height) * 100,
     ];
     if (guide) {
-      const points = [...useApp.getState().drawPoints, p];
+      const current = useApp.getState();
+      if (current.guideMode === "erase") {
+        const erased = [...current.guideErasePoints, p];
+        const visible = current.drawPoints.filter(([x, y]) => erased.every(([ex, ey]) => Math.hypot(x - ex, y - ey) > 8));
+        const polyline = visible.map((point) => point.join(",")).join(" ");
+        const guideComposite = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#0b1525"/><polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
+        useApp.setState({ guideErasePoints: erased, guideEraseMask: JSON.stringify(erased), guideComposite });
+        return;
+      }
+      const points = [...current.drawPoints, p];
       const polyline = points.map((point) => point.join(",")).join(" ");
       const guideComposite = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#0b1525"/><polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
       useApp.setState({ drawPoints: points, guideComposite });
@@ -361,9 +374,11 @@ function App() {
         <section className="panel">
           <div className="panel-head">
             <span>01 / GUIDE CANVAS</span>
-            <button onClick={() => useApp.setState({ drawPoints: [], guideComposite: null })}>
-              Clear draw
-            </button>
+            <div>
+              <button onClick={() => useApp.setState({ guideMode: "draw" })}>Draw</button>
+              <button onClick={() => useApp.setState({ guideMode: "erase" })}>Erase</button>
+              <button onClick={() => useApp.setState({ drawPoints: [], guideErasePoints: [], guideEraseMask: null, guideComposite: null })}>Clear</button>
+            </div>
           </div>
           <Canvas guide />
           <p className="hint">
@@ -535,6 +550,7 @@ function PersistenceBootstrap() {
         guideImage: latest.importedImage ?? null,
         drawPoints: latest.humanDrawLayer ?? [],
         guideEraseMask: latest.guideEraseMask ?? null,
+        guideErasePoints: latest.guideEraseMask ? JSON.parse(latest.guideEraseMask) : [],
         guideComposite: latest.guideComposite ?? null,
         diffusionStepCount: latest.diffusionStepCount ?? s.diffusionStepCount,
         seed: latest.seed ?? s.seed,
