@@ -50,6 +50,19 @@ class RuntimeResponse(BaseModel):
     diffusionSteps: int = 0
 
 
+class SnapshotRequest(BaseModel):
+    sessionId: str
+    snapshotId: str | None = None
+
+
+class SnapshotResponse(BaseModel):
+    snapshotId: str
+    sessionId: str
+    diffusionStep: int
+    diffusionSteps: int
+    previewImage: str
+
+
 @dataclass
 class Session:
     seed: int
@@ -60,6 +73,7 @@ class Session:
 sessions: dict[str, Session] = {}
 real_runtime = None
 real_runtime_lock = threading.Lock()
+runtime_snapshots: dict[str, object] = {}
 
 
 @app.get("/runtime/health")
@@ -107,3 +121,27 @@ def intervention(request: Intervention) -> RuntimeResponse:
 def finish(request: Intervention) -> RuntimeResponse:
     request.phase = "finish"
     return intervention(request)
+
+
+@app.post("/runtime/snapshot", response_model=SnapshotResponse)
+def save_runtime_snapshot(request: SnapshotRequest) -> SnapshotResponse:
+    session = sessions[request.sessionId]
+    if session.real_state is None:
+        raise ValueError("Runtime session has no real state")
+    snapshot_id = str(uuid.uuid4())
+    runtime_snapshots[snapshot_id] = session.real_state.clone()
+    state = runtime_snapshots[snapshot_id]
+    with real_runtime_lock:
+        image = real_runtime._preview(real_runtime._pipeline(), state.latents)
+    return SnapshotResponse(snapshotId=snapshot_id, sessionId=request.sessionId, diffusionStep=state.step_index, diffusionSteps=len(state.timesteps), previewImage=image)
+
+
+@app.post("/runtime/snapshot/restore", response_model=SnapshotResponse)
+def restore_runtime_snapshot(request: SnapshotRequest) -> SnapshotResponse:
+    if request.sessionId not in sessions or not request.snapshotId or request.snapshotId not in runtime_snapshots:
+        raise ValueError("Runtime snapshot not found")
+    state = runtime_snapshots[request.snapshotId].clone()
+    sessions[request.sessionId].real_state = state
+    with real_runtime_lock:
+        image = real_runtime._preview(real_runtime._pipeline(), state.latents)
+    return SnapshotResponse(snapshotId=request.snapshotId, sessionId=request.sessionId, diffusionStep=state.step_index, diffusionSteps=len(state.timesteps), previewImage=image)

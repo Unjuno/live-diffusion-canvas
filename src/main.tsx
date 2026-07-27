@@ -42,7 +42,7 @@ type State = {
   pause(): void;
   resume(): void;
   tickOnce(): Promise<void>;
-  saveSnapshot(): void;
+  saveSnapshot(): Promise<void>;
   finish(snapshot: Snapshot): Promise<void>;
 };
 
@@ -159,9 +159,15 @@ const useApp = create<State>((set, get) => ({
       runtimeRequestInFlight = false;
     }
   },
-  saveSnapshot: () => {
+  saveSnapshot: async () => {
     const s = get();
     if (!s.generatedImage) return;
+    let runtimeSnapshotId: string | undefined;
+    if (s.backend === "tinysd" && s.runtimeSessionId) {
+      const response = await fetch(`${RUNTIME_URL}/runtime/snapshot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: s.runtimeSessionId }) });
+      if (!response.ok) throw new Error(`Snapshot HTTP ${response.status}`);
+      runtimeSnapshotId = (await response.json()).snapshotId;
+    }
     const snapshot = {
       id: crypto.randomUUID(),
       createdAt: Date.now(),
@@ -175,6 +181,7 @@ const useApp = create<State>((set, get) => ({
       lastNoiseMask: s.lastNoiseMask,
       diffusionStepCount: s.diffusionStepCount,
       seed: s.seed,
+      runtimeSnapshotId,
     };
     void persistSnapshot(snapshot);
     set({ snapshots: [...s.snapshots, snapshot] });
@@ -542,10 +549,22 @@ function PersistenceBootstrap() {
   const finish = () => {
     if (latest) useApp.getState().finish(latest);
   };
-  const restore = () => {
-    if (latest)
+  const restore = async () => {
+    if (latest) {
+      let generatedImage = latest.generatedImage;
+      let diffusionStep = useApp.getState().diffusionStep;
+      let diffusionSteps = useApp.getState().diffusionSteps;
+      const sessionId = useApp.getState().runtimeSessionId;
+      if (latest.runtimeSnapshotId && sessionId) {
+        const response = await fetch(`${RUNTIME_URL}/runtime/snapshot/restore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, snapshotId: latest.runtimeSnapshotId }) });
+        if (!response.ok) throw new Error(`Restore HTTP ${response.status}`);
+        const runtimeSnapshot = await response.json();
+        generatedImage = runtimeSnapshot.previewImage;
+        diffusionStep = runtimeSnapshot.diffusionStep;
+        diffusionSteps = runtimeSnapshot.diffusionSteps;
+      }
       useApp.setState({
-        generatedImage: latest.generatedImage,
+        generatedImage,
         prompt: latest.prompt,
         guideImage: latest.importedImage ?? null,
         drawPoints: latest.humanDrawLayer ?? [],
@@ -554,10 +573,13 @@ function PersistenceBootstrap() {
         guideComposite: latest.guideComposite ?? null,
         diffusionStepCount: latest.diffusionStepCount ?? s.diffusionStepCount,
         seed: latest.seed ?? s.seed,
+        diffusionStep,
+        diffusionSteps,
         noiseBrushActive: false,
         activeNoiseMask: [],
         loopStatus: "paused",
       });
+    }
   };
   return (
     <>

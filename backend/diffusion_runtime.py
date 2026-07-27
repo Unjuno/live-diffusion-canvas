@@ -20,10 +20,23 @@ class DiffusionState:
     prompt_embeds: torch.Tensor
     negative_prompt_embeds: torch.Tensor
     timesteps: torch.Tensor
+    step_index: int = 0
     guide_mask: torch.Tensor | None = None
     guide_influence: float = 0.0
     guide_composite: str | None = None
-    step_index: int = 0
+
+    def clone(self) -> "DiffusionState":
+        return DiffusionState(
+            prompt=self.prompt,
+            latents=self.latents.detach().clone(),
+            prompt_embeds=self.prompt_embeds.detach().clone(),
+            negative_prompt_embeds=self.negative_prompt_embeds.detach().clone(),
+            timesteps=self.timesteps.detach().clone(),
+            step_index=self.step_index,
+            guide_mask=self.guide_mask.detach().clone() if self.guide_mask is not None else None,
+            guide_influence=self.guide_influence,
+            guide_composite=self.guide_composite,
+        )
 
 
 class TinySDRuntime:
@@ -84,7 +97,7 @@ class TinySDRuntime:
             )
             pipe.scheduler.set_timesteps(steps, device=self.device)
             guide_mask = self._guide_mask(guide_composite, latents.shape[-2], latents.shape[-1])
-            return DiffusionState(prompt, latents, positive, negative, pipe.scheduler.timesteps.detach().clone(), guide_mask, guide_influence, guide_composite)
+            return DiffusionState(prompt=prompt, latents=latents, prompt_embeds=positive, negative_prompt_embeds=negative, timesteps=pipe.scheduler.timesteps.detach().clone(), guide_mask=guide_mask, guide_influence=guide_influence, guide_composite=guide_composite)
 
     def _preview(self, pipe, latents: torch.Tensor) -> str:
         with torch.no_grad():
