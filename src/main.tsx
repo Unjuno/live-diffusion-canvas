@@ -571,7 +571,15 @@ function App() {
       </div>
       <footer>
         <span>
-          {s.generationStatus === "generating" ? "Loading model / generating" : s.loopStatus === "running" ? "Explore is rolling from the current state" : s.loopStatus === "paused" ? "Exploration paused" : "Ready to explore"}
+          {s.generationStatus === "generating"
+            ? "Loading model / generating"
+            : s.generationPhase === "finish" && s.generationStatus === "idle"
+              ? "Finished from snapshot"
+              : s.loopStatus === "running"
+                ? "Explore is rolling from the current state"
+                : s.loopStatus === "paused"
+                  ? "Exploration paused"
+                  : "Ready to explore"}
           {` · global noise ${s.globalNoise.toFixed(2)} · guide ${Math.round(s.guideInfluence * 100)}%`}
         </span>
           <span>
