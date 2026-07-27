@@ -83,7 +83,8 @@ def health() -> dict[str, str]:
 
 @app.post("/runtime/session")
 def create_session(request: SessionRequest) -> dict[str, str | int]:
-    session_id = f"mock-{uuid.uuid4()}"
+    runtime_name = "real" if os.getenv("DIFFUSION_REAL", "0") == "1" else "mock"
+    session_id = f"{runtime_name}-{uuid.uuid4()}"
     sessions[session_id] = Session(seed=request.seed)
     return {"sessionId": session_id, "seed": request.seed}
 

@@ -182,6 +182,7 @@ const useApp = create<State>((set, get) => ({
       diffusionStepCount: s.diffusionStepCount,
       seed: s.seed,
       runtimeSnapshotId,
+      runtimeSessionId: s.backend === "tinysd" ? s.runtimeSessionId ?? undefined : undefined,
     };
     void persistSnapshot(snapshot);
     set({ snapshots: [...s.snapshots, snapshot] });
@@ -366,7 +367,14 @@ function App() {
         <select
           aria-label="Backend"
           value={s.backend}
-          onChange={(e) => useApp.setState({ backend: e.target.value })}
+          onChange={(e) => useApp.setState({
+            backend: e.target.value,
+            runtimeSessionId: null,
+            generatedImage: null,
+            diffusionStep: 0,
+            diffusionSteps: 0,
+            loopStatus: "paused",
+          })}
         >
           <option value="mock">Mock Runtime</option>
           <option value="tinysd">TinySD · local Diffusers</option>
@@ -496,12 +504,18 @@ function App() {
                 <button className="panel-action" onClick={() => void clearSnapshots().then(() => useApp.setState({ snapshots: [] }))} disabled={s.snapshots.length === 0}>Clear</button>
               </div>
             </div>
-            {s.snapshots.length === 0 ? (
+          {(s.backend === "tinysd"
+            ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
+            : s.snapshots
+          ).length === 0 ? (
               <div className="empty">
                 Run the canvas, then save a state to branch from it.
               </div>
             ) : (
-              s.snapshots.map((x, i) => (
+              (s.backend === "tinysd"
+                ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
+                : s.snapshots
+              ).map((x, i) => (
                 <div className="snapshot" key={x.id}>
                   <img src={x.generatedImage} />
                   <div>
@@ -527,7 +541,7 @@ function App() {
       </div>
       <footer>
         <span>
-          {s.generationStatus === "generating" ? "Loading model / generating" : s.loopStatus === "running" ? "Explore is rolling" : s.loopStatus === "paused" ? "Exploration paused" : "Ready to explore"}
+          {s.generationStatus === "generating" ? "Loading model / generating" : s.loopStatus === "running" ? "Explore is rolling from the current state" : s.loopStatus === "paused" ? "Exploration paused" : "Ready to explore"}
           {` · global noise ${s.globalNoise.toFixed(2)} · guide ${Math.round(s.guideInfluence * 100)}%`}
         </span>
           <span>
@@ -545,7 +559,10 @@ function PersistenceBootstrap() {
   useEffect(() => {
     void loadSnapshots().then((snapshots) => useApp.setState({ snapshots }));
   }, []);
-  const latest = s.snapshots[s.snapshots.length - 1];
+  const visibleSnapshots = s.backend === "tinysd"
+    ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
+    : s.snapshots;
+  const latest = visibleSnapshots[visibleSnapshots.length - 1];
   const finish = () => {
     if (latest) useApp.getState().finish(latest);
   };
