@@ -13,8 +13,8 @@ from pydantic import BaseModel, Field
 app = FastAPI(title="Live Diffusion Canvas Runtime", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[],
-    allow_origin_regex=r"https?://(127\.0\.0\.1|localhost):517[0-9]$",
+    allow_origins=["tauri://localhost", "http://tauri.localhost"],
+    allow_origin_regex=r"https?://(127\.0\.0\.1|localhost):(3000|4173|517[0-9])$",
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],

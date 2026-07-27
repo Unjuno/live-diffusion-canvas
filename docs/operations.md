@@ -19,6 +19,10 @@ python3 -m venv .venv
 ./scripts/run-backend.sh
 ```
 
+If `.venv-real` exists, `run-backend.sh` automatically starts the real
+TinySD/Diffusers runtime. Set `DIFFUSION_REAL=0` explicitly when the mock
+runtime is needed.
+
 Terminal 2:
 
 ```bash
