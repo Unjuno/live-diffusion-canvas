@@ -4,7 +4,7 @@ import { create } from "zustand";
 import "./styles.css";
 import "./real-model.css";
 import { makePreview } from "./runtime";
-import { loadSnapshots, persistSnapshot, type StoredSnapshot } from "./db";
+import { clearSnapshots, loadSnapshots, persistSnapshot, type StoredSnapshot } from "./db";
 
 type LoopStatus = "idle" | "running" | "paused";
 type Snapshot = StoredSnapshot;
@@ -326,7 +326,7 @@ function App() {
         </div>
         <div className="runtime">
           <span className="dot" /> {s.loopStatus.toUpperCase()}{" "}
-          <small>SESSION {s.tick ? `mock-${s.seed}` : "—"}</small>
+          <small>SESSION {s.runtimeSessionId ?? "—"}</small>
         </div>
       </header>
       <section className="toolbar">
@@ -341,13 +341,13 @@ function App() {
           onChange={(e) => useApp.setState({ backend: e.target.value })}
         >
           <option value="mock">Mock Runtime</option>
-          <option value="tinysd">TinySD (planned)</option>
+          <option value="tinysd">TinySD · local Diffusers</option>
         </select>
         <button className="primary" onClick={s.run}>
           Run
         </button>
-        <button onClick={s.pause}>Pause</button>
-        <button onClick={s.resume}>Resume</button>
+        <button onClick={s.pause} disabled={s.loopStatus !== "running"}>Pause</button>
+        <button onClick={s.resume} disabled={s.loopStatus !== "paused"}>Resume</button>
       </section>
       <div className="workspace">
         <section className="panel">
@@ -461,7 +461,10 @@ function App() {
           <section className="panel snapshots">
             <div className="panel-head">
               <span>SNAPSHOT TIMELINE</span>
-              <button onClick={s.saveSnapshot}>Save</button>
+              <div>
+                <button onClick={s.saveSnapshot}>Save</button>
+                <button className="panel-action" onClick={() => void clearSnapshots().then(() => useApp.setState({ snapshots: [] }))} disabled={s.snapshots.length === 0}>Clear</button>
+              </div>
             </div>
             {s.snapshots.length === 0 ? (
               <div className="empty">
@@ -494,8 +497,8 @@ function App() {
       </div>
       <footer>
         <span>
-          Explore is rolling · global noise {s.globalNoise.toFixed(2)} · guide{" "}
-          {Math.round(s.guideInfluence * 100)}%
+          {s.loopStatus === "running" ? "Explore is rolling" : s.loopStatus === "paused" ? "Exploration paused" : "Ready to explore"}
+          {` · global noise ${s.globalNoise.toFixed(2)} · guide ${Math.round(s.guideInfluence * 100)}%`}
         </span>
           <span>
             Updates: {s.tick}

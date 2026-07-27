@@ -4,3 +4,4 @@ class SnapshotDatabase extends Dexie { snapshots!: Table<StoredSnapshot,string>;
 export const snapshotDb = new SnapshotDatabase();
 export const loadSnapshots = () => snapshotDb.snapshots.orderBy('createdAt').toArray();
 export const persistSnapshot = (snapshot:StoredSnapshot) => snapshotDb.snapshots.put(snapshot);
+export const clearSnapshots = () => snapshotDb.snapshots.clear();
