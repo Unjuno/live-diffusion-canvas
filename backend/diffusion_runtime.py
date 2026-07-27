@@ -135,6 +135,11 @@ class TinySDRuntime:
                 noise = pipe.unet(latent_input, timestep, encoder_hidden_states=embeds, return_dict=False)[0]
             uncond, text = noise.chunk(2)
             noise = uncond + 7.5 * (text - uncond)
+            preview_latents = None
+            if hasattr(pipe.scheduler, "alphas_cumprod"):
+                timestep_index = int(timestep.item())
+                alpha = pipe.scheduler.alphas_cumprod[timestep_index].to(state.latents.device, state.latents.dtype)
+                preview_latents = (state.latents - (1 - alpha).sqrt() * noise) / alpha.sqrt()
             state.latents = pipe.scheduler.step(noise, timestep, state.latents, return_dict=False)[0]
             if state.guide_mask is not None and state.guide_influence > 0:
                 # TinySD has no ControlNet; apply the Guide as a bounded
@@ -160,4 +165,4 @@ class TinySDRuntime:
             # decode and turn the entire preview black.
             state.latents = torch.nan_to_num(state.latents, nan=0.0, posinf=4.0, neginf=-4.0).clamp(-4.0, 4.0)
             state.step_index += 1
-            return self._preview(pipe, state.latents), round((time.perf_counter() - started) * 1000), state.step_index
+            return self._preview(pipe, preview_latents if preview_latents is not None else state.latents), round((time.perf_counter() - started) * 1000), state.step_index
