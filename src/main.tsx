@@ -41,10 +41,11 @@ type State = {
   resume(): void;
   tickOnce(): Promise<void>;
   saveSnapshot(): void;
-  finish(snapshot: Snapshot): void;
+  finish(snapshot: Snapshot): Promise<void>;
 };
 
 let runtimeRequestInFlight = false;
+const RUNTIME_URL = import.meta.env.VITE_RUNTIME_URL ?? "http://127.0.0.1:8000";
 
 const useApp = create<State>((set, get) => ({
   prompt: "a quiet architectural landscape at blue hour",
@@ -100,7 +101,7 @@ const useApp = create<State>((set, get) => ({
       }
       let sessionId = s.runtimeSessionId;
       if (!sessionId) {
-        const session = await fetch("http://127.0.0.1:8000/runtime/session", {
+        const session = await fetch(`${RUNTIME_URL}/runtime/session`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ seed: s.seed }),
@@ -109,7 +110,7 @@ const useApp = create<State>((set, get) => ({
         set({ runtimeSessionId: sessionId });
       }
       const response = await fetch(
-        "http://127.0.0.1:8000/runtime/intervention",
+        `${RUNTIME_URL}/runtime/intervention`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -145,8 +146,9 @@ const useApp = create<State>((set, get) => ({
     } catch (error) {
       set({
         generationStatus: "error",
-        errorMessage:
-          error instanceof Error ? error.message : "Runtime unavailable",
+      errorMessage: error instanceof TypeError && error.message === "Failed to fetch"
+          ? `Runtime unavailable at ${RUNTIME_URL}. Start the FastAPI runtime.`
+          : error instanceof Error ? error.message : "Runtime unavailable",
         loopStatus: "paused",
       });
     } finally {
@@ -167,26 +169,29 @@ const useApp = create<State>((set, get) => ({
       guideEraseMask: s.guideEraseMask ?? undefined,
       guideComposite: s.guideComposite ?? undefined,
       lastNoiseMask: s.lastNoiseMask,
+      diffusionStepCount: s.diffusionStepCount,
+      seed: s.seed,
     };
     void persistSnapshot(snapshot);
     set({ snapshots: [...s.snapshots, snapshot] });
   },
-  finish: (snapshot) => {
+  finish: async (snapshot) => {
     set({
       loopStatus: "paused",
       generationStatus: "generating",
       generationPhase: "finish",
-      generatedImage: makePreview(get().tick + 1, get().seed, false),
     });
-    window.setTimeout(
-      () =>
-        set({
-          generationStatus: "idle",
-          prompt: snapshot.prompt,
-          tick: get().tick + 1,
-        }),
-      180,
-    );
+    const s = get();
+    if (s.backend === "mock") {
+      set({ generatedImage: makePreview(s.tick + 1, s.seed, false), generationStatus: "idle", prompt: snapshot.prompt, tick: s.tick + 1 });
+      return;
+    }
+    try {
+      const response = await fetch(`${RUNTIME_URL}/runtime/finish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: s.tick + 1, sessionId: s.runtimeSessionId, prompt: snapshot.prompt, guideComposite: snapshot.guideComposite, guideInfluence: s.guideInfluence, globalExplorationNoiseStrength: 0, noiseBrushActive: false, activeNoiseMask: null, localRejectionStrength: s.localRejection, updatesToAdvance: 1, phase: "finish", diffusionSteps: s.diffusionStepCount }) }).then(async (r) => { if (!r.ok) throw new Error(`Finish HTTP ${r.status}`); return r.json(); });
+      set({ generatedImage: response.previewImage, diffusionStep: response.diffusionStep, diffusionSteps: response.diffusionSteps, generationStatus: "idle", prompt: snapshot.prompt, tick: s.tick + 1, errorMessage: null });
+    } catch (error) {
+      set({ generationStatus: "error", errorMessage: error instanceof Error ? error.message : "Finish failed" });
+    }
   },
 }));
 
@@ -234,9 +239,12 @@ function Canvas({ guide = false }: { guide?: boolean }) {
       ((e.clientX - r.left) / r.width) * 100,
       ((e.clientY - r.top) / r.height) * 100,
     ];
-    if (guide)
-      useApp.setState({ drawPoints: [...useApp.getState().drawPoints, p] });
-    else
+    if (guide) {
+      const points = [...useApp.getState().drawPoints, p];
+      const polyline = points.map((point) => point.join(",")).join(" ");
+      const guideComposite = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#0b1525"/><polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
+      useApp.setState({ drawPoints: points, guideComposite });
+    } else
       useApp.setState({
         activeNoiseMask: [...useApp.getState().activeNoiseMask, p],
         noiseBrushActive: true,
@@ -353,7 +361,7 @@ function App() {
         <section className="panel">
           <div className="panel-head">
             <span>01 / GUIDE CANVAS</span>
-            <button onClick={() => useApp.setState({ drawPoints: [] })}>
+            <button onClick={() => useApp.setState({ drawPoints: [], guideComposite: null })}>
               Clear draw
             </button>
           </div>
@@ -497,7 +505,7 @@ function App() {
       </div>
       <footer>
         <span>
-          {s.loopStatus === "running" ? "Explore is rolling" : s.loopStatus === "paused" ? "Exploration paused" : "Ready to explore"}
+          {s.generationStatus === "generating" ? "Loading model / generating" : s.loopStatus === "running" ? "Explore is rolling" : s.loopStatus === "paused" ? "Exploration paused" : "Ready to explore"}
           {` · global noise ${s.globalNoise.toFixed(2)} · guide ${Math.round(s.guideInfluence * 100)}%`}
         </span>
           <span>
@@ -528,6 +536,8 @@ function PersistenceBootstrap() {
         drawPoints: latest.humanDrawLayer ?? [],
         guideEraseMask: latest.guideEraseMask ?? null,
         guideComposite: latest.guideComposite ?? null,
+        diffusionStepCount: latest.diffusionStepCount ?? s.diffusionStepCount,
+        seed: latest.seed ?? s.seed,
         noiseBrushActive: false,
         activeNoiseMask: [],
         loopStatus: "paused",
@@ -538,9 +548,11 @@ function PersistenceBootstrap() {
       {s.errorMessage && (
         <div className="runtime-error">Runtime error: {s.errorMessage}</div>
       )}
-      <span className="real-model-badge">
-        Real model route: segmind/tiny-sd · MPS
-      </span>
+      {s.backend === "tinysd" && (
+        <span className="real-model-badge">
+          Real model route: segmind/tiny-sd · MPS
+        </span>
+      )}
       <div className="snapshot-actions">
         <button onClick={restore} disabled={!latest}>
           Restore latest
