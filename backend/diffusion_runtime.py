@@ -20,6 +20,7 @@ class DiffusionState:
     latents: torch.Tensor
     prompt_embeds: torch.Tensor
     negative_prompt_embeds: torch.Tensor
+    added_cond_kwargs: dict[str, torch.Tensor] | None = None
     timesteps: torch.Tensor
     step_index: int = 0
     guide_mask: torch.Tensor | None = None
@@ -37,6 +38,7 @@ class DiffusionState:
             latents=self.latents.detach().clone(),
             prompt_embeds=self.prompt_embeds.detach().clone(),
             negative_prompt_embeds=self.negative_prompt_embeds.detach().clone(),
+            added_cond_kwargs={key: value.detach().clone() for key, value in self.added_cond_kwargs.items()} if self.added_cond_kwargs else None,
             timesteps=self.timesteps.detach().clone(),
             step_index=self.step_index,
             guide_mask=self.guide_mask.detach().clone() if self.guide_mask is not None else None,
@@ -142,18 +144,39 @@ class TinySDRuntime:
             return None
         return torch.maximum(masks[0], masks[1]) if len(masks) == 2 else masks[0]
 
+    def _encode_prompt(self, pipe, prompt: str, height: int, width: int):
+        encoded = pipe.encode_prompt(
+            prompt=prompt,
+            device=self.device,
+            num_images_per_prompt=1,
+            do_classifier_free_guidance=True,
+        )
+        positive, negative = encoded[:2]
+        added = None
+        # SDXL returns pooled prompt embeddings in addition to token embeds.
+        # The UNet requires both pooled text and six crop/size time ids.
+        if len(encoded) >= 4:
+            pooled, negative_pooled = encoded[2:4]
+            projection_dim = getattr(getattr(pipe, "text_encoder_2", None), "config", None)
+            projection_dim = getattr(projection_dim, "projection_dim", None)
+            if projection_dim is not None and hasattr(pipe, "_get_add_time_ids"):
+                time_ids = pipe._get_add_time_ids(
+                    (height, width), (0, 0), (height, width),
+                    dtype=positive.dtype, text_encoder_projection_dim=projection_dim,
+                )
+                added = {
+                    "text_embeds": torch.cat([negative_pooled, pooled]),
+                    "time_ids": time_ids.to(self.device).repeat(2, 1),
+                }
+        return positive, negative, added
+
     def start(self, prompt: str, seed: int, steps: int = 8, guidance_scale: float = 7.5, guide_composite: str | None = None, imported_image: str | None = None, guide_erase_mask: str | None = None, guide_influence: float = 0.0) -> DiffusionState:
         with self._lock:
             pipe = self._pipeline()
             do_cfg = True
-            positive, negative = pipe.encode_prompt(
-                prompt=prompt,
-                device=self.device,
-                num_images_per_prompt=1,
-                do_classifier_free_guidance=do_cfg,
-            )[:2]
             height = pipe.unet.config.sample_size * pipe.vae_scale_factor
             width = height
+            positive, negative, added = self._encode_prompt(pipe, prompt, height, width)
             generator = torch.Generator(device="cpu").manual_seed(seed)
             latents = pipe.prepare_latents(
                 1, pipe.unet.config.in_channels, height, width,
@@ -161,21 +184,17 @@ class TinySDRuntime:
             )
             pipe.scheduler.set_timesteps(steps, device=self.device)
             guide_mask = self._guide_mask(guide_composite, imported_image, guide_erase_mask, latents.shape[-2], latents.shape[-1])
-            return DiffusionState(prompt=prompt, latents=latents, prompt_embeds=positive, negative_prompt_embeds=negative, timesteps=pipe.scheduler.timesteps.detach().clone(), guide_mask=guide_mask, guide_influence=guide_influence, guide_composite=guide_composite, imported_image=imported_image, guide_erase_mask=guide_erase_mask, guidance_scale=guidance_scale, requested_steps=steps)
+            return DiffusionState(prompt=prompt, latents=latents, prompt_embeds=positive, negative_prompt_embeds=negative, added_cond_kwargs=added, timesteps=pipe.scheduler.timesteps.detach().clone(), guide_mask=guide_mask, guide_influence=guide_influence, guide_composite=guide_composite, imported_image=imported_image, guide_erase_mask=guide_erase_mask, guidance_scale=guidance_scale, requested_steps=steps)
 
     def update_conditions(self, state: DiffusionState, prompt: str, guide_composite: str | None, imported_image: str | None, guide_erase_mask: str | None, guide_influence: float, guidance_scale: float) -> None:
         """Change conditions without throwing away the retained latent state."""
         with self._lock:
             pipe = self._pipeline()
-            positive, negative = pipe.encode_prompt(
-                prompt=prompt,
-                device=self.device,
-                num_images_per_prompt=1,
-                do_classifier_free_guidance=True,
-            )[:2]
+            positive, negative, added = self._encode_prompt(pipe, prompt, state.latents.shape[-1] * pipe.vae_scale_factor, state.latents.shape[-2] * pipe.vae_scale_factor)
             state.prompt = prompt
             state.prompt_embeds = positive
             state.negative_prompt_embeds = negative
+            state.added_cond_kwargs = added
             state.guide_composite = guide_composite
             state.imported_image = imported_image
             state.guide_erase_mask = guide_erase_mask
@@ -258,7 +277,10 @@ class TinySDRuntime:
             latent_input = pipe.scheduler.scale_model_input(latent_input, timestep)
             embeds = torch.cat([state.negative_prompt_embeds, state.prompt_embeds])
             with torch.no_grad():
-                noise = pipe.unet(latent_input, timestep, encoder_hidden_states=embeds, return_dict=False)[0]
+                unet_kwargs = {"encoder_hidden_states": embeds, "return_dict": False}
+                if state.added_cond_kwargs is not None:
+                    unet_kwargs["added_cond_kwargs"] = state.added_cond_kwargs
+                noise = pipe.unet(latent_input, timestep, **unet_kwargs)[0]
             uncond, text = noise.chunk(2)
             noise = uncond + state.guidance_scale * (text - uncond)
             preview_latents = None
