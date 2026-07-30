@@ -84,18 +84,37 @@ const useApp = create<State>((set, get) => ({
   diffusionStep: 0,
   diffusionSteps: 0,
   diffusionStepCount: 8,
-  run: () =>
+  run: () => {
+    const current = get();
+    if (current.backend === "tinysd" && current.runtimeModelReady === false) {
+      set({
+        loopStatus: "paused",
+        generationStatus: "error",
+        errorMessage: `${current.model} is not ready. Download the model files before running.`,
+      });
+      return;
+    }
     set({
       loopStatus: "running",
       generationPhase: "explore",
       errorMessage: null,
-    }),
+    });
+  },
   pause: () => set({ loopStatus: "paused" }),
   resume: () => set({ loopStatus: "running" }),
   tickOnce: async () => {
     if (runtimeRequestInFlight) return;
     runtimeRequestInFlight = true;
     const s = get();
+    if (s.backend === "tinysd" && s.runtimeModelReady === false) {
+      runtimeRequestInFlight = false;
+      set({
+        generationStatus: "error",
+        loopStatus: "paused",
+        errorMessage: `${s.model} is not ready. Download the model files before running.`,
+      });
+      return;
+    }
     const tick = s.tick + 1;
     set({ generationStatus: "generating" });
     try {
@@ -436,7 +455,7 @@ function App() {
           <option value="segmind/tiny-sd">segmind/tiny-sd</option>
           <option value="stable-diffusion-v1-5/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
         </select>
-        <button className="primary" onClick={s.run}>
+        <button className="primary" onClick={s.run} disabled={s.backend === "tinysd" && s.runtimeModelReady === false}>
           Run
         </button>
         <button onClick={s.pause} disabled={s.loopStatus !== "running"}>Pause</button>
