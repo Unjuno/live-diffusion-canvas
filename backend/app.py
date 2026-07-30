@@ -78,7 +78,12 @@ runtime_snapshots: dict[str, object] = {}
 
 @app.get("/runtime/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "runtime": "tiny-sd" if os.getenv("DIFFUSION_REAL", "0") == "1" else "mock-stateful"}
+    real = os.getenv("DIFFUSION_REAL", "0") == "1"
+    return {
+        "status": "ok",
+        "runtime": "diffusers" if real else "mock-stateful",
+        "model": os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd") if real else "mock-stateful-v0.1",
+    }
 
 
 @app.post("/runtime/session")
