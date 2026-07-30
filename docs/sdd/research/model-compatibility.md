@@ -17,15 +17,24 @@ or benchmarked locally.
 
 ## Compatibility matrix
 
-| Candidate | Stateful latent loop | Guide Canvas conditioning | Noise Brush | Practical next step |
-|---|---:|---|---|---|
-| TinySD | Yes, current implementation | Weak spatial latent bias | Local re-noising | Keep as v0.1 reference runtime |
-| Stable Diffusion 1.5 | Yes, likely lowest-risk replacement | ControlNet or adapter for strong guide control | Local re-noising / SDEdit-style step | Add model-configurable pipeline and run a real regression |
-| SDXL base | Yes in principle, but larger and slower | SDXL ControlNet or T2I-Adapter | Local re-noising, with more memory pressure | Separate backend profile; do not silently swap into TinySD |
+| Model | Basic generation | Stateful loop | Guide Canvas | Noise Brush | Snapshot | Status |
+|---|---:|---:|---:|---:|---:|---|
+| TinySD | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified |
+| Stable Diffusion 1.5 | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified on Apple MPS |
+| SD-Turbo | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
+| SDXL base | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
+| FLUX.1 schnell/dev | No adapter in runtime | No | No | No | No | Not implemented |
+
+“Verified” means the same runtime contract was exercised: generated frames
+changed, one session continued across intervention, Guide Canvas and Noise
+Brush changed the output, previews did not go black, and Snapshot restore/Finish
+remained available. A model being listed in the selector does not imply this
+level of support.
 | SDXL base + refiner | Base can be stateful; refiner is a separate stage | Conditioning belongs to the base stage | Brush should affect base latent before refining | Defer until base runtime is stable |
 | ControlNet (SD 1.5/SDXL) | Yes through the underlying Diffusers pipeline | Strong spatial guide conditioning | Compatible with the same rejection mask contract | v0.2/v0.3 adapter, not required for v0.1 |
 | LCM / LCM-LoRA | Yes, but only with a compatible scheduler/model setup | Depends on the base model and adapter | Compatible, but few-step dynamics need retuning | Optional fast runtime profile after baseline |
 | ComfyUI adapter | Depends on workflow; not guaranteed stateful | Can expose ControlNet and other nodes | Requires a custom state/session strategy | Spike only; preserve this UI and contract |
+| FLUX.1 | Requires a dedicated FluxPipeline runtime | Requires FLUX-specific conditioning work | Requires a FLUX latent intervention design | Dedicated backend profile; do not route through the SD runtime |
 
 ## Decision
 

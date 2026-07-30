@@ -100,6 +100,13 @@ base. Stable Diffusion 1.5 is verified on the 64 GB Apple Silicon machine.
 SD-Turbo and SDXL are experimental catalog entries: download their weights
 and run the regression suite before treating them as supported.
 
+Current support is explicit: TinySD and Stable Diffusion 1.5 support basic
+generation, stateful continuation, Guide Canvas, Noise Brush, and Snapshot
+restore/Finish. SD-Turbo and SDXL are listed but not yet verified. FLUX is not
+implemented in this runtime; it needs a separate `FluxPipeline` backend and
+must not be treated as an SD-compatible model swap. See the [model capability
+matrix](docs/sdd/research/model-compatibility.md) before selecting a model.
+
 The catalog and local readiness can be inspected without loading weights:
 
 ```bash
