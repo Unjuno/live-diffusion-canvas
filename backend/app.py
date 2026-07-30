@@ -87,7 +87,10 @@ MODEL_CATALOG = (
     {"id": "segmind/tiny-sd", "label": "TinySD", "profile": "sd15-compatible"},
     {"id": "stable-diffusion-v1-5/stable-diffusion-v1-5", "label": "Stable Diffusion 1.5", "profile": "sd15-compatible"},
     {"id": "stabilityai/sd-turbo", "label": "SD-Turbo", "profile": "sd15-compatible"},
+    {"id": "stabilityai/sdxl-turbo", "label": "SDXL-Turbo", "profile": "sdxl-compatible"},
     {"id": "stabilityai/stable-diffusion-xl-base-1.0", "label": "SDXL base (experimental)", "profile": "sdxl-experimental"},
+    {"id": "black-forest-labs/FLUX.1-schnell", "label": "FLUX.1 schnell", "profile": "flux-experimental"},
+    {"id": "stabilityai/stable-diffusion-3.5-medium", "label": "Stable Diffusion 3.5 Medium", "profile": "sd3-experimental"},
 )
 
 

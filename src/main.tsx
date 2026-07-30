@@ -546,7 +546,10 @@ function App() {
           <option value="segmind/tiny-sd">segmind/tiny-sd</option>
           <option value="stable-diffusion-v1-5/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
           <option value="stabilityai/sd-turbo">SD-Turbo · experimental</option>
+          <option value="stabilityai/sdxl-turbo">SDXL-Turbo · experimental</option>
           <option value="stabilityai/stable-diffusion-xl-base-1.0">SDXL base · experimental</option>
+          <option value="black-forest-labs/FLUX.1-schnell">FLUX.1 schnell · experimental</option>
+          <option value="stabilityai/stable-diffusion-3.5-medium">Stable Diffusion 3.5 Medium · experimental</option>
         </select>
         <button className="primary" onClick={s.run} disabled={s.loopStatus === "running" || (s.backend === "tinysd" && s.runtimeModelReady !== true)}>
           {s.loopStatus === "running" ? "Running…" : "Run"}

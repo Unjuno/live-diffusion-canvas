@@ -22,8 +22,10 @@ or benchmarked locally.
 | TinySD | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified |
 | Stable Diffusion 1.5 | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified on Apple MPS |
 | SD-Turbo | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
+| SDXL-Turbo | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
 | SDXL base | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
-| FLUX.1 schnell/dev | No adapter in runtime | No | No | No | No | Not implemented |
+| FLUX.1 schnell/dev | Not downloaded | Not tested | Not tested | Not tested | Not tested | Dedicated Flux runtime required |
+| Stable Diffusion 3.5 Medium | Not downloaded | Not tested | Not tested | Not tested | Not tested | Dedicated MMDiT runtime required |
 
 “Verified” means the same runtime contract was exercised: generated frames
 changed, one session continued across intervention, Guide Canvas and Noise
