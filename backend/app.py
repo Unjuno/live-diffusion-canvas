@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,7 @@ app.add_middleware(
 
 class SessionRequest(BaseModel):
     seed: int = 42
+    model: str | None = None
 
 
 class Intervention(BaseModel):
@@ -67,12 +68,13 @@ class SnapshotResponse(BaseModel):
 @dataclass
 class Session:
     seed: int
+    model: str = "segmind/tiny-sd"
     tick: int = 0
     real_state: object | None = None
 
 
 sessions: dict[str, Session] = {}
-real_runtime = None
+real_runtimes: dict[str, object] = {}
 real_runtime_lock = threading.Lock()
 runtime_snapshots: dict[str, object] = {}
 
@@ -101,14 +103,14 @@ def _model_ready(model_id: str) -> bool:
 
 
 @app.get("/runtime/health")
-def health() -> dict[str, str | bool]:
+def health(model: str | None = Query(default=None)) -> dict[str, str | bool]:
     real = os.getenv("DIFFUSION_REAL", "0") == "1"
-    model = os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd") if real else "mock-stateful-v0.1"
+    active_model = (model or os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd")) if real else "mock-stateful-v0.1"
     return {
         "status": "ok",
         "runtime": "diffusers" if real else "mock-stateful",
-        "model": model,
-        "modelReady": _model_ready(model) if real else True,
+        "model": active_model,
+        "modelReady": _model_ready(active_model) if real else True,
     }
 
 
@@ -116,20 +118,21 @@ def health() -> dict[str, str | bool]:
 def create_session(request: SessionRequest) -> dict[str, str | int]:
     runtime_name = "real" if os.getenv("DIFFUSION_REAL", "0") == "1" else "mock"
     session_id = f"{runtime_name}-{uuid.uuid4()}"
-    sessions[session_id] = Session(seed=request.seed)
+    sessions[session_id] = Session(seed=request.seed, model=request.model or os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd"))
     return {"sessionId": session_id, "seed": request.seed}
 
 
 @app.post("/runtime/intervention", response_model=RuntimeResponse)
 def intervention(request: Intervention) -> RuntimeResponse:
-    session = sessions.setdefault(request.sessionId, Session(seed=42))
+    session = sessions.setdefault(request.sessionId, Session(seed=42, model=os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd")))
     session.tick += request.updatesToAdvance
     if os.getenv("DIFFUSION_REAL", "0") == "1":
-        global real_runtime
         with real_runtime_lock:
-            if real_runtime is None:
+            runtime = real_runtimes.get(session.model)
+            if runtime is None:
                 from backend.diffusion_runtime import TinySDRuntime
-                real_runtime = TinySDRuntime()
+                runtime = TinySDRuntime(session.model)
+                real_runtimes[session.model] = runtime
             rejection_mask = None
             if request.noiseBrushActive and request.activeNoiseMask:
                 try:
@@ -137,15 +140,15 @@ def intervention(request: Intervention) -> RuntimeResponse:
                 except json.JSONDecodeError:
                     rejection_mask = None
             if session.real_state is None or len(session.real_state.timesteps) != request.diffusionSteps:
-                session.real_state = real_runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps, guide_composite=request.guideComposite, guide_influence=request.guideInfluence)
+                session.real_state = runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps, guide_composite=request.guideComposite, guide_influence=request.guideInfluence)
             elif (session.real_state.prompt != request.prompt or
                   session.real_state.guide_composite != request.guideComposite or
                   session.real_state.guide_influence != request.guideInfluence):
-                real_runtime.update_conditions(session.real_state, request.prompt, request.guideComposite, request.guideInfluence)
-            image, latency_ms, step = real_runtime.advance(session.real_state, rejection_mask=rejection_mask, rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0, exploration_strength=request.globalExplorationNoiseStrength)
+                runtime.update_conditions(session.real_state, request.prompt, request.guideComposite, request.guideInfluence)
+            image, latency_ms, step = runtime.advance(session.real_state, rejection_mask=rejection_mask, rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0, exploration_strength=request.globalExplorationNoiseStrength)
             if request.phase == "finish":
                 while step < len(session.real_state.timesteps):
-                    image, extra_latency, step = real_runtime.advance(session.real_state, exploration_strength=0.0)
+                    image, extra_latency, step = runtime.advance(session.real_state, exploration_strength=0.0)
                     latency_ms += extra_latency
         return RuntimeResponse(requestId=request.requestId, sessionId=request.sessionId, previewImage=image, seed=session.seed, latencyMs=latency_ms, diffusionStep=step, diffusionSteps=len(session.real_state.timesteps))
     accent = "f06b5d" if request.noiseBrushActive and request.activeNoiseMask else "7c5cff"
@@ -167,8 +170,9 @@ def save_runtime_snapshot(request: SnapshotRequest) -> SnapshotResponse:
     snapshot_id = str(uuid.uuid4())
     runtime_snapshots[snapshot_id] = session.real_state.clone()
     state = runtime_snapshots[snapshot_id]
+    runtime = real_runtimes[session.model]
     with real_runtime_lock:
-        image = real_runtime._preview(real_runtime._pipeline(), state.latents)
+        image = runtime._preview(runtime._pipeline(), state.latents)
     return SnapshotResponse(snapshotId=snapshot_id, sessionId=request.sessionId, diffusionStep=state.step_index, diffusionSteps=len(state.timesteps), previewImage=image)
 
 
@@ -178,6 +182,7 @@ def restore_runtime_snapshot(request: SnapshotRequest) -> SnapshotResponse:
         raise ValueError("Runtime snapshot not found")
     state = runtime_snapshots[request.snapshotId].clone()
     sessions[request.sessionId].real_state = state
+    runtime = real_runtimes[sessions[request.sessionId].model]
     with real_runtime_lock:
-        image = real_runtime._preview(real_runtime._pipeline(), state.latents)
+        image = runtime._preview(runtime._pipeline(), state.latents)
     return SnapshotResponse(snapshotId=request.snapshotId, sessionId=request.sessionId, diffusionStep=state.step_index, diffusionSteps=len(state.timesteps), previewImage=image)

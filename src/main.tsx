@@ -113,7 +113,7 @@ const useApp = create<State>((set, get) => ({
         const session = await fetch(`${RUNTIME_URL}/runtime/session`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ seed: s.seed }),
+        body: JSON.stringify({ seed: s.seed, model: s.model }),
         }).then((r) => r.json());
         sessionId = session.sessionId;
         set({ runtimeSessionId: sessionId });
@@ -427,6 +427,15 @@ function App() {
           <option value="mock">Mock Runtime</option>
           <option value="tinysd">TinySD · local Diffusers</option>
         </select>
+        <select
+          aria-label="Model"
+          value={s.model}
+          onChange={(e) => useApp.setState({ model: e.target.value, runtimeSessionId: null, generatedImage: null, diffusionStep: 0, diffusionSteps: 0, loopStatus: "paused" })}
+        >
+          <option value="mock-stateful-v0.1">Mock Stateful v0.1</option>
+          <option value="segmind/tiny-sd">segmind/tiny-sd</option>
+          <option value="stable-diffusion-v1-5/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
+        </select>
         <button className="primary" onClick={s.run}>
           Run
         </button>
@@ -617,13 +626,13 @@ function PersistenceBootstrap() {
   }, []);
   useEffect(() => {
     if (s.backend !== "tinysd") return;
-    void fetch(`${RUNTIME_URL}/runtime/health`)
+    void fetch(`${RUNTIME_URL}/runtime/health?model=${encodeURIComponent(s.model)}`)
       .then((response) => response.ok ? response.json() : null)
       .then((health) => {
         if (health?.model) useApp.setState({ runtimeModel: health.model, runtimeModelReady: health.modelReady !== false });
       })
       .catch(() => useApp.setState({ runtimeModel: null, runtimeModelReady: null }));
-  }, [s.backend]);
+  }, [s.backend, s.model]);
   const visibleSnapshots = s.backend === "tinysd"
     ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
     : s.snapshots;
