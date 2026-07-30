@@ -95,6 +95,26 @@ The first generation can download and load `segmind/tiny-sd`; subsequent
 requests reuse the loaded pipeline. The UI's real-model badge reports the
 runtime type, model, device, and readiness state.
 
+The model selector also includes Stable Diffusion 1.5, SD-Turbo, and SDXL
+base. Stable Diffusion 1.5 is verified on the 64 GB Apple Silicon machine.
+SD-Turbo and SDXL are experimental catalog entries: download their weights
+and run the regression suite before treating them as supported.
+
+The catalog and local readiness can be inspected without loading weights:
+
+```bash
+curl http://127.0.0.1:8000/runtime/models
+```
+
+To test a downloaded model with the same midstream intervention sequence:
+
+```bash
+MODEL_ID=stable-diffusion-v1-5/stable-diffusion-v1-5 \
+RUNTIME_URL=http://127.0.0.1:8000 RUNTIME_KIND=tinysd \
+EXPERIMENT_OUT=artifacts/midstream/sd15 \
+.venv-real/bin/python scripts/regression-midstream-intervention.py
+```
+
 ### Environment overrides
 
 | Variable | Purpose | Default |

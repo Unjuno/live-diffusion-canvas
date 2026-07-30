@@ -83,6 +83,13 @@ real_runtimes: dict[str, object] = {}
 real_runtime_lock = threading.Lock()
 runtime_snapshots: dict[str, object] = {}
 
+MODEL_CATALOG = (
+    {"id": "segmind/tiny-sd", "label": "TinySD", "profile": "sd15-compatible"},
+    {"id": "stable-diffusion-v1-5/stable-diffusion-v1-5", "label": "Stable Diffusion 1.5", "profile": "sd15-compatible"},
+    {"id": "stabilityai/sd-turbo", "label": "SD-Turbo", "profile": "sd15-compatible"},
+    {"id": "stabilityai/stable-diffusion-xl-base-1.0", "label": "SDXL base (experimental)", "profile": "sdxl-experimental"},
+)
+
 
 def _model_ready(model_id: str) -> bool:
     """Return whether the complete local model snapshot is available."""
@@ -127,6 +134,13 @@ def health(model: str | None = Query(default=None)) -> dict[str, str | bool]:
         "modelReady": _model_ready(active_model) if real else True,
         "device": device,
     }
+
+
+@app.get("/runtime/models")
+def models() -> list[dict[str, str | bool]]:
+    """Report selectable models and local readiness without loading weights."""
+    real = os.getenv("DIFFUSION_REAL", "0") == "1"
+    return [{**entry, "modelReady": _model_ready(entry["id"]) if real else True} for entry in MODEL_CATALOG]
 
 
 @app.post("/runtime/session")

@@ -8,8 +8,12 @@ or benchmarked locally.
 
 - `segmind/tiny-sd`: present in the local Hugging Face cache and exercised by
   `backend/diffusion_runtime.py` on Apple MPS.
-- SD 1.5, SDXL, ControlNet, and LCM: not present in the local cache at the
-  time of this check, so they are candidates, not verified backends.
+- `stable-diffusion-v1-5/stable-diffusion-v1-5`: downloaded into the local
+  cache and verified through the real FastAPI runtime on Apple MPS. One
+  stateful preview request completed successfully at 512x512.
+- SD-Turbo and SDXL remain catalog candidates. They are deliberately exposed
+  as experimental choices, but are not called supported until their weights
+  and stateful intervention regressions have been completed.
 
 ## Compatibility matrix
 
@@ -43,4 +47,3 @@ the stateful session contract.
 A candidate is not considered supported until it passes the same regression
 scenarios as TinySD: prompt difference, guide difference, brush difference,
 continued exploration, non-black previews, and snapshot restore equality.
-

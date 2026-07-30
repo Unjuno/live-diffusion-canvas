@@ -545,6 +545,8 @@ function App() {
           <option value="mock-stateful-v0.1">Mock Stateful v0.1</option>
           <option value="segmind/tiny-sd">segmind/tiny-sd</option>
           <option value="stable-diffusion-v1-5/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
+          <option value="stabilityai/sd-turbo">SD-Turbo · experimental</option>
+          <option value="stabilityai/stable-diffusion-xl-base-1.0">SDXL base · experimental</option>
         </select>
         <button className="primary" onClick={s.run} disabled={s.loopStatus === "running" || (s.backend === "tinysd" && s.runtimeModelReady !== true)}>
           {s.loopStatus === "running" ? "Running…" : "Run"}

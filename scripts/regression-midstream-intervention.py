@@ -21,6 +21,7 @@ from PIL import Image, ImageChops, ImageStat, ImageDraw
 
 BASE = os.getenv("RUNTIME_URL", "http://127.0.0.1:8000")
 KIND = os.getenv("RUNTIME_KIND", "mock")
+MODEL_ID = os.getenv("MODEL_ID", "segmind/tiny-sd")
 OUT = Path(os.getenv("EXPERIMENT_OUT", f"artifacts/midstream/{KIND}"))
 OUT.mkdir(parents=True, exist_ok=True)
 
@@ -47,7 +48,7 @@ def diff(a: Image.Image, b: Image.Image) -> float:
 
 
 def main() -> None:
-    session = post("/runtime/session", {"seed": 2407, "model": "segmind/tiny-sd" if KIND != "mock" else None})["sessionId"]
+    session = post("/runtime/session", {"seed": 2407, "model": MODEL_ID if KIND != "mock" else None})["sessionId"]
     guide = None
     frames: list[Image.Image] = []
     records: list[dict] = []
