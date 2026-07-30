@@ -87,7 +87,10 @@ class TinySDRuntime:
                             model_source = str(snapshot)
                 except Exception:
                     pass
-            self._pipe = DiffusionPipeline.from_pretrained(model_source, torch_dtype=self.dtype, safety_checker=None)
+            load_options = {"torch_dtype": self.dtype, "safety_checker": None}
+            if self.model_id in {"stabilityai/sdxl-turbo", "stabilityai/stable-diffusion-xl-base-1.0"}:
+                load_options["variant"] = "fp16"
+            self._pipe = DiffusionPipeline.from_pretrained(model_source, **load_options)
             # SD 1.5 repositories commonly default to PNDM. PNDM's warm-up
             # history is not restartable after a latent intervention, which
             # causes long-horizon re-entry artifacts. DDIM preserves the same

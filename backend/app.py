@@ -101,8 +101,8 @@ def _model_ready(model_id: str) -> bool:
         root = model_path
         has = lambda *parts: any((root / part).exists() for part in parts)
         return all((root / part).exists() for part in ("model_index.json", "scheduler/scheduler_config.json", "unet/config.json", "vae/config.json")) and all((
-            has("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.bin"),
-            has("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.bin"),
+            has("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.fp16.safetensors", "unet/diffusion_pytorch_model.bin"),
+            has("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"),
             has("text_encoder/model.safetensors", "text_encoder/pytorch_model.bin"),
         ))
     try:
@@ -111,9 +111,9 @@ def _model_ready(model_id: str) -> bool:
             ("model_index.json",),
             ("scheduler/scheduler_config.json",),
             ("unet/config.json",),
-            ("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.bin"),
+            ("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.fp16.safetensors", "unet/diffusion_pytorch_model.bin"),
             ("vae/config.json",),
-            ("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.bin"),
+            ("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"),
             ("text_encoder/config.json",),
             ("text_encoder/model.safetensors", "text_encoder/pytorch_model.bin"),
             ("tokenizer/vocab.json",),
