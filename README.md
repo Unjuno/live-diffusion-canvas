@@ -33,6 +33,13 @@ For Mock Runtime development:
 - Node.js 22 or newer
 - npm
 
+For running the Python test suite locally, install the development requirements:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r backend/requirements-dev.txt
+```
+
 For the real local model:
 
 - Python 3.12 recommended
