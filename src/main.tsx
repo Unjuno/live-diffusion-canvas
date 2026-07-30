@@ -542,7 +542,10 @@ function App() {
             <div className="panel-head">
               <span>SNAPSHOT TIMELINE</span>
               <div>
-                <button onClick={s.saveSnapshot}>Save</button>
+                <button onClick={() => void s.saveSnapshot().catch((error) => useApp.setState({
+                  generationStatus: "error",
+                  errorMessage: error instanceof Error ? error.message : "Snapshot save failed",
+                }))}>Save</button>
                 <button className="panel-action" onClick={() => void clearSnapshots().then(() => useApp.setState({ snapshots: [] }))} disabled={s.snapshots.length === 0}>Clear</button>
               </div>
             </div>
@@ -565,7 +568,10 @@ function App() {
                     <small>{x.note}</small>
                   </div>
                   <button
-                    onClick={() => void useApp.getState().restoreSnapshot(x)}
+                    onClick={() => void useApp.getState().restoreSnapshot(x).catch((error) => useApp.setState({
+                      generationStatus: "error",
+                      errorMessage: error instanceof Error ? error.message : "Restore failed",
+                    }))}
                   >
                     Restore
                   </button>
@@ -611,7 +617,16 @@ function PersistenceBootstrap() {
     if (latest) useApp.getState().finish(latest);
   };
   const restore = async () => {
-    if (latest) await useApp.getState().restoreSnapshot(latest);
+    if (latest) {
+      try {
+        await useApp.getState().restoreSnapshot(latest);
+      } catch (error) {
+        useApp.setState({
+          generationStatus: "error",
+          errorMessage: error instanceof Error ? error.message : "Restore failed",
+        });
+      }
+    }
   };
   return (
     <>
