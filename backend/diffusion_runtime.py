@@ -20,8 +20,8 @@ class DiffusionState:
     latents: torch.Tensor
     prompt_embeds: torch.Tensor
     negative_prompt_embeds: torch.Tensor
-    added_cond_kwargs: dict[str, torch.Tensor] | None = None
     timesteps: torch.Tensor
+    added_cond_kwargs: dict[str, torch.Tensor] | None = None
     step_index: int = 0
     guide_mask: torch.Tensor | None = None
     guide_influence: float = 0.0
