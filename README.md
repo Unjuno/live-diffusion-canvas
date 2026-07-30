@@ -1,103 +1,256 @@
 # Live Diffusion Canvas
 
-Local application for exploring and steering intermediate diffusion states with
-Guide Canvas, generated-state intervention, Noise Brush, and snapshots.
+Live Diffusion Canvas is a local application for exploring and steering
+intermediate diffusion states. It is designed around a rolling diffusion
+session, not one-shot prompt-to-final-image generation.
 
-## Run locally
+```text
+Prompt → Guide Canvas → Generated State → Noise Brush → Snapshot
+                                      ↘ Restore / Finish
+```
+
+The application keeps the Guide Canvas separate from the Generated Image. A
+guide can be drawn or imported, while Noise Brush temporarily rejects a local
+solution in the generated state during a press/drag gesture.
+
+## Features
+
+- Stateful Mock Runtime for fast development and demos
+- Real local Diffusers/TinySD runtime (`segmind/tiny-sd`)
+- Rolling Run / Pause / Resume loop
+- Guide Canvas with imported image, drawing layer, and non-destructive erase
+- Momentary Noise Brush with adjustable size and rejection strength
+- Exploration noise, temperature, CFG, guide influence, seed, and step settings
+- IndexedDB-backed Snapshot Timeline
+- Snapshot Restore and Finish-from-Snapshot
+- Tauri macOS desktop bundle
+- Long-horizon and midstream intervention regression experiments
+
+## Requirements
+
+For Mock Runtime development:
+
+- Node.js 22 or newer
+- npm
+
+For the real local model:
+
+- Python 3.12 recommended
+- Apple Silicon macOS with MPS, or a compatible CPU environment
+- Approximately 1 GB for TinySD model files
+- Network access for the first dependency/model download
+
+## Quick start: Mock Runtime
+
+The Mock Runtime requires no Python environment and is the quickest way to
+inspect the UI and interaction model.
 
 ```bash
 npm install
 npm run dev -- --host 127.0.0.1
 ```
 
-Open the printed Vite URL. Without a runtime server, the UI uses its local
-preview path. For the supported stateful API, start the backend in a second
-terminal.
+Open the printed Vite URL and leave `Backend` set to `Mock Runtime`.
 
-For local use with one command, use:
+For a single command that starts the web app and a local FastAPI runtime when
+needed:
 
 ```bash
 ./scripts/run-local.sh
 ```
 
-It starts the runtime when needed and cleans it up when the web process exits.
+The script reuses a healthy runtime on port 8000. If it starts one itself, it
+stops that process when the web process exits.
 
-## Verification
+## Real TinySD runtime
 
-```bash
-npm test
-npm run build
-```
-
-The browser-first app is structured so the same React UI can be packaged with Tauri and connected to a local FastAPI/Diffusers runtime. `segmind/tiny-sd` is the configured real local model on Apple MPS; the lightweight mock remains available for fast tests. The Tauri bundle includes the FastAPI source and attempts to start it automatically when a compatible Python environment is available.
-
-## Optional FastAPI runtime
-
-Mock runtime:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-DIFFUSION_REAL=0 PYTHONPATH=. uvicorn backend.app:app --host 127.0.0.1 --port 8000
-```
-
-Real TinySD/Diffusers runtime (Apple MPS or CPU):
+Create the real environment and install the backend dependencies:
 
 ```bash
 ./scripts/setup-real-runtime.sh
-DIFFUSION_REAL=1 PYTHONPATH=. uvicorn backend.app:app --host 127.0.0.1 --port 8000
 ```
 
-Before opening the UI, verify the selected real runtime and model readiness:
+Start the runtime:
+
+```bash
+DIFFUSION_REAL=1 PYTHONPATH=. \
+  .venv-real/bin/uvicorn backend.app:app \
+  --host 127.0.0.1 --port 8000
+```
+
+Check that the real runtime and model are ready before opening the UI:
 
 ```bash
 REQUIRE_REAL=1 ./scripts/check-runtime.sh
 ```
 
-The first real generation may download `segmind/tiny-sd` from Hugging Face and
-requires network access and local disk space.
+The first generation can download and load `segmind/tiny-sd`; subsequent
+requests reuse the loaded pipeline. The UI's real-model badge reports the
+runtime type, model, device, and readiness state.
 
-The repository also provides `scripts/run-backend.sh`, which selects the real
-environment when `.venv-real` exists and otherwise starts the mock runtime.
+### Environment overrides
 
-When using the packaged macOS app, install the real environment once from the
-repository before building or on the target machine:
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `PYTHON_COMMAND` | Python executable used by setup | `python3.12` |
+| `REAL_RUNTIME_ENV` | Real virtualenv directory | `.venv-real` |
+| `DIFFUSION_REAL` | Enable Diffusers runtime | `0` |
+| `DIFFUSION_MODEL` | Local model path or Hub id | `segmind/tiny-sd` |
+| `VITE_RUNTIME_URL` | Runtime URL used by the web app | `http://127.0.0.1:8000` |
+| `RUNTIME_URL` | Runtime URL used by diagnostics | `http://127.0.0.1:8000` |
 
-```bash
-./scripts/setup-real-runtime.sh
-```
+## How to use the application
 
-The app searches `DIFFUSION_PYTHON`, the packaged `.venv-real`, and `python3`.
-If no usable Diffusers environment is available, the app still opens and the
-Mock Runtime remains usable; select TinySD only after the real runtime health
-badge reports readiness.
+1. Enter or revise the prompt.
+2. Draw a positive guide, or import an image into Guide Canvas.
+3. Press `Run` to start the rolling exploration loop.
+4. Use `Pause` when you want to inspect the current state.
+5. Hold and drag on Generated State to reject a local solution. The brush is
+   momentary and clears on release.
+6. Adjust temperature, global exploration, guide influence, CFG, and brush
+   size while exploring.
+7. Press `Save` in Snapshot Timeline to keep a state.
+8. Use the snapshot's `Restore` to return to it, or `Finish` to denoise it to
+   the final diffusion step.
+9. Use `Reset session` only when you intentionally want a new runtime state.
 
-To produce a self-contained macOS app with the current Python environment and
-the cached TinySD snapshot embedded, use:
+Imported images are guide-only. They do not automatically reset the runtime or
+replace the Generated Image.
 
-```bash
-./scripts/build-macos-full.sh
-```
+## Verification
 
-This produces an approximately 1.2 GB app on the current environment. The
-runtime and model are stored as archives in the app and unpacked into the
-user's application-data directory on first launch.
-
-The runtime exposes `/runtime/health`, `/runtime/session`,
-`/runtime/intervention`, `/runtime/finish`, and snapshot endpoints. The health
-endpoint is the authoritative check that the selected model is available.
-
-## Regression checks
+Run the lightweight checks from the repository root:
 
 ```bash
 npm test -- --run
 npm run build
 .venv/bin/python -m pytest -q
-
-# while the real backend is running
-RUNTIME_URL=http://127.0.0.1:8000 \
-  .venv-real/bin/python scripts/regression-real-runtime.py
-RUNTIME_URL=http://127.0.0.1:8000 RUNTIME_KIND=tinysd \
-  .venv-real/bin/python scripts/regression-midstream-intervention.py
+.venv-real/bin/python -m compileall -q backend scripts
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
+
+Verify a live runtime and one real image response:
+
+```bash
+RUNTIME_URL=http://127.0.0.1:8000 \
+  MODEL_ID=segmind/tiny-sd RUNTIME_KIND=real \
+  ./scripts/verify-runtime.sh
+```
+
+The diagnostic writes no repository files. Experiment scripts write generated
+frames and metrics below the ignored `artifacts/` directory.
+
+## Regression experiments
+
+With a real runtime running, collect a long-horizon image series:
+
+```bash
+RUNTIME_URL=http://127.0.0.1:8000 \
+RUNTIME_KIND=tinysd EXPERIMENT_HORIZON=24 \
+EXPERIMENT_OUT=artifacts/long-horizon \
+.venv-real/bin/python scripts/long-horizon-intervention.py
+```
+
+Test intervention while the same Explore session is still advancing:
+
+```bash
+RUNTIME_URL=http://127.0.0.1:8000 \
+RUNTIME_KIND=tinysd EXPERIMENT_OUT=artifacts/midstream \
+.venv-real/bin/python scripts/regression-midstream-intervention.py
+```
+
+These checks measure unique frames, frame differences, luma, clipping,
+diffusion-step progression, Guide effect, Brush effect, and session continuity.
+Inspect the generated `contact-sheet.png` and `metrics.json` together.
+
+## Desktop packaging
+
+### Lightweight shell
+
+Build the normal Tauri app shell:
+
+```bash
+npm run tauri build -- --bundles app
+```
+
+The resulting Apple Silicon app is placed under:
+
+```text
+src-tauri/target/release/bundle/macos/Live Diffusion Canvas.app
+```
+
+The shell includes the backend source and tries to start a compatible local
+runtime. If no real environment is available, the UI can still use Mock
+Runtime.
+
+### Self-contained macOS app
+
+After `setup-real-runtime.sh` has installed the dependencies and TinySD has
+been downloaded once, build the full app:
+
+```bash
+./scripts/build-macos-full.sh
+```
+
+This embeds the Python environment and TinySD weights as compressed resources.
+The current build is approximately 1.2 GB and expands them into the app's
+application-data directory on first launch. The script is intended for a
+prepared Apple Silicon macOS build machine; it does not cross-compile the
+Python environment for another operating system or CPU architecture.
+
+## Architecture
+
+```text
+React + Vite + TypeScript
+  ├─ Zustand              UI and runtime state
+  ├─ Konva/react-konva    canvas interaction layer
+  └─ Dexie/IndexedDB      semantic snapshot persistence
+
+FastAPI local runtime
+  ├─ Mock Stateful Runtime
+  └─ TinySD / Diffusers stateful denoising runtime
+
+Tauri 2 desktop shell
+  └─ optional packaged runtime and model archives
+```
+
+The HTTP runtime exposes:
+
+- `GET /runtime/health`
+- `POST /runtime/session`
+- `POST /runtime/intervention`
+- `POST /runtime/finish`
+- `POST /runtime/snapshot`
+- `POST /runtime/snapshot/restore`
+
+The source of truth for v0.1 product semantics is under [`docs/sdd/`](docs/sdd/).
+Start with [`AGENTS.md`](AGENTS.md) and [`docs/sdd/README.md`](docs/sdd/README.md).
+
+## Repository layout
+
+```text
+backend/       FastAPI runtime and runtime tests
+docs/          SDD, ADRs, and operations documentation
+scripts/       setup, diagnostics, regression, and packaging commands
+src/           React UI, state, canvas, and persistence
+src-tauri/     Tauri desktop shell and packaging configuration
+public/        static web assets
+```
+
+Generated files such as `artifacts/`, `dist/`, virtual environments, Tauri
+targets, and browser logs are intentionally ignored by Git.
+
+## Known limitations
+
+- The full self-contained packaging path currently targets Apple Silicon macOS.
+- TinySD is the real-runtime integration target; it is not a production-scale
+  image-quality model.
+- WebSocket transport, cloud deployment, authentication, collaboration, and
+  ControlNet are outside the v0.1 scope.
+- Model quality depends on local hardware, Diffusers versions, prompt, seed,
+  and the selected exploration settings.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
