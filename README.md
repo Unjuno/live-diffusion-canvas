@@ -29,4 +29,4 @@ pip install -r backend/requirements.txt
 uvicorn backend.app:app --reload --port 8000
 ```
 
-The runtime exposes `/runtime/health`, `/runtime/session`, `/runtime/intervention`, and `/runtime/finish`. It is a stateful mock boundary until a GPU backend is selected.
+The runtime exposes `/runtime/health`, `/runtime/session`, `/runtime/intervention`, and `/runtime/finish`. Set `DIFFUSION_REAL=1` to use the local TinySD Diffusers runtime; otherwise the browser uses the lightweight mock path.

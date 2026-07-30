@@ -340,7 +340,13 @@ function Canvas({ guide = false }: { guide?: boolean }) {
       className={`canvas ${guide ? "guide-canvas" : "generated-canvas"}`}
       onPointerDown={(e) => {
         setDrawing(true);
-        ref.current?.setPointerCapture(e.pointerId);
+        try {
+          ref.current?.setPointerCapture(e.pointerId);
+        } catch {
+          // Synthetic pointer events and some touch implementations do not
+          // expose an active pointer to capture. Drawing still works without
+          // capture; the real pointer path keeps capture for drag continuity.
+        }
         add(e);
       }}
       onPointerMove={add}
