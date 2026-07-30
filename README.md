@@ -122,6 +122,17 @@ EXPERIMENT_OUT=artifacts/midstream/sd15 \
 .venv-real/bin/python scripts/regression-midstream-intervention.py
 ```
 
+To run that regression for every catalog model that is actually ready:
+
+```bash
+RUNTIME_URL=http://127.0.0.1:8000 \
+.venv-real/bin/python scripts/model-matrix.py
+```
+
+The matrix writes one image sequence and `matrix.json` under
+`artifacts/model-matrix`. Unavailable or unimplemented model profiles are
+recorded as `skipped`, never as passing.
+
 ### Environment overrides
 
 | Variable | Purpose | Default |
