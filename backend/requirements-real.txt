@@ -1,0 +1,4 @@
+# Real local Diffusers runtime. Keep this separate so the lightweight mock
+# environment does not need torch/model dependencies.
+-r requirements.txt
+huggingface_hub>=0.24

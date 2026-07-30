@@ -1,1 +1,3 @@
-.real-model-badge{position:fixed;left:24px;bottom:22px;z-index:5;background:#20c997;color:#07101d;border-radius:8px;padding:8px 10px;font:10px 'DM Mono';font-weight:700;letter-spacing:.04em}
+.real-model-badge{position:fixed;left:24px;bottom:22px;z-index:5;background:#20c997;color:#07101d;border-radius:8px;padding:8px 10px;font:10px 'DM Mono';font-weight:700;letter-spacing:.04em;display:flex;gap:8px;align-items:center}.real-model-badge.needs-setup{background:#ffc857}.real-model-badge button{padding:4px 7px;background:#07101d;color:#edf3ff;border-color:#07101d;font-size:10px}
+.runtime-error{position:fixed;top:16px;left:24px;right:24px;z-index:20;padding:10px 14px;border:1px solid #ff8d86;border-radius:8px;background:#5d242b;color:#fff0ee;font:12px 'DM Mono';box-shadow:0 10px 30px #0006}
+@media(max-width:760px){.real-model-badge{left:16px;right:16px;bottom:76px;text-align:center}}

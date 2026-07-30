@@ -1,4 +1,6 @@
-from backend.app import Intervention, Session, finish, health, intervention, sessions
+import pytest
+
+from backend.app import HTTPException, Intervention, Session, finish, health, intervention, sessions
 
 
 def test_health_reports_stateful_runtime():
@@ -26,3 +28,22 @@ def test_finish_reuses_stateful_intervention_path():
     response = finish(Intervention(requestId=2, sessionId=session_id, prompt="finish", phase="explore"))
     assert response.requestId == 2
     assert sessions[session_id].tick == 1
+
+
+def test_intervention_honors_multiple_updates_in_mock_runtime():
+    session_id = "multi-update-session"
+    sessions[session_id] = Session(seed=4)
+    response = intervention(Intervention(
+        requestId=3,
+        sessionId=session_id,
+        prompt="multi",
+        updatesToAdvance=3,
+    ))
+    assert sessions[session_id].tick == 3
+    assert response.previewImage.startswith("data:image/svg+xml,")
+
+
+def test_intervention_rejects_unknown_session_instead_of_resetting_state():
+    with pytest.raises(HTTPException) as error:
+        intervention(Intervention(requestId=99, sessionId="missing-session"))
+    assert error.value.status_code == 404

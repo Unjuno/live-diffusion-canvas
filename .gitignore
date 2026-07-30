@@ -6,3 +6,4 @@ src-tauri/target/
 dist/
 *.tsbuildinfo
 .playwright-mcp/
+src-tauri/package-resources/
