@@ -24,6 +24,7 @@ class DiffusionState:
     guide_mask: torch.Tensor | None = None
     guide_influence: float = 0.0
     guide_composite: str | None = None
+    guidance_scale: float = 7.5
 
     def clone(self) -> "DiffusionState":
         return DiffusionState(
@@ -36,6 +37,7 @@ class DiffusionState:
             guide_mask=self.guide_mask.detach().clone() if self.guide_mask is not None else None,
             guide_influence=self.guide_influence,
             guide_composite=self.guide_composite,
+            guidance_scale=self.guidance_scale,
         )
 
 
@@ -78,7 +80,6 @@ class TinySDRuntime:
         return mask
 
     def start(self, prompt: str, seed: int, steps: int = 8, guidance_scale: float = 7.5, guide_composite: str | None = None, guide_influence: float = 0.0) -> DiffusionState:
-        del guidance_scale  # guidance is applied in advance; kept in the public contract.
         with self._lock:
             pipe = self._pipeline()
             do_cfg = True
@@ -97,9 +98,9 @@ class TinySDRuntime:
             )
             pipe.scheduler.set_timesteps(steps, device=self.device)
             guide_mask = self._guide_mask(guide_composite, latents.shape[-2], latents.shape[-1])
-            return DiffusionState(prompt=prompt, latents=latents, prompt_embeds=positive, negative_prompt_embeds=negative, timesteps=pipe.scheduler.timesteps.detach().clone(), guide_mask=guide_mask, guide_influence=guide_influence, guide_composite=guide_composite)
+            return DiffusionState(prompt=prompt, latents=latents, prompt_embeds=positive, negative_prompt_embeds=negative, timesteps=pipe.scheduler.timesteps.detach().clone(), guide_mask=guide_mask, guide_influence=guide_influence, guide_composite=guide_composite, guidance_scale=guidance_scale)
 
-    def update_conditions(self, state: DiffusionState, prompt: str, guide_composite: str | None, guide_influence: float) -> None:
+    def update_conditions(self, state: DiffusionState, prompt: str, guide_composite: str | None, guide_influence: float, guidance_scale: float) -> None:
         """Change conditions without throwing away the retained latent state."""
         with self._lock:
             pipe = self._pipeline()
@@ -114,6 +115,7 @@ class TinySDRuntime:
             state.negative_prompt_embeds = negative
             state.guide_composite = guide_composite
             state.guide_influence = guide_influence
+            state.guidance_scale = guidance_scale
             state.guide_mask = self._guide_mask(guide_composite, state.latents.shape[-2], state.latents.shape[-1])
 
     def _preview(self, pipe, latents: torch.Tensor) -> str:
@@ -164,7 +166,7 @@ class TinySDRuntime:
             with torch.no_grad():
                 noise = pipe.unet(latent_input, timestep, encoder_hidden_states=embeds, return_dict=False)[0]
             uncond, text = noise.chunk(2)
-            noise = uncond + 7.5 * (text - uncond)
+            noise = uncond + state.guidance_scale * (text - uncond)
             preview_latents = None
             if hasattr(pipe.scheduler, "alphas_cumprod"):
                 timestep_index = int(timestep.item())

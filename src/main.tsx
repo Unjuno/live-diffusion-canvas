@@ -19,6 +19,7 @@ type State = {
   guideInfluence: number;
   globalNoise: number;
   localRejection: number;
+  cfg: number;
   brushSize: number;
   updateInterval: number;
   seed: number;
@@ -63,6 +64,7 @@ const useApp = create<State>((set, get) => ({
   guideInfluence: 0.5,
   globalNoise: 0.04,
   localRejection: 0.7,
+  cfg: 7.5,
   brushSize: 34,
   updateInterval: 1200,
   seed: 42,
@@ -148,6 +150,7 @@ const useApp = create<State>((set, get) => ({
             prompt: s.prompt,
             guideComposite: s.guideComposite,
             guideInfluence: s.guideInfluence,
+            cfg: s.cfg,
             globalExplorationNoiseStrength: s.globalNoise,
             noiseBrushActive: s.noiseBrushActive,
             activeNoiseMask: s.activeNoiseMask.length
@@ -205,6 +208,7 @@ const useApp = create<State>((set, get) => ({
       lastNoiseMask: s.lastNoiseMask,
       diffusionStepCount: s.diffusionStepCount,
       seed: s.seed,
+      cfg: s.cfg,
       runtimeSnapshotId,
       runtimeSessionId: s.backend === "tinysd" ? s.runtimeSessionId ?? undefined : undefined,
     };
@@ -238,6 +242,7 @@ const useApp = create<State>((set, get) => ({
       guideComposite: snapshot.guideComposite ?? null,
       diffusionStepCount: snapshot.diffusionStepCount ?? s.diffusionStepCount,
       seed: snapshot.seed ?? s.seed,
+      cfg: snapshot.cfg ?? s.cfg,
       diffusionStep,
       diffusionSteps,
       noiseBrushActive: false,
@@ -258,7 +263,7 @@ const useApp = create<State>((set, get) => ({
       return;
     }
     try {
-      const response = await fetch(`${RUNTIME_URL}/runtime/finish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: s.tick + 1, sessionId: s.runtimeSessionId, prompt: snapshot.prompt, guideComposite: snapshot.guideComposite, guideInfluence: s.guideInfluence, globalExplorationNoiseStrength: 0, noiseBrushActive: false, activeNoiseMask: null, localRejectionStrength: s.localRejection, updatesToAdvance: 1, phase: "finish", diffusionSteps: s.diffusionStepCount }) }).then(async (r) => { if (!r.ok) throw new Error(`Finish HTTP ${r.status}`); return r.json(); });
+      const response = await fetch(`${RUNTIME_URL}/runtime/finish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: s.tick + 1, sessionId: s.runtimeSessionId, prompt: snapshot.prompt, guideComposite: snapshot.guideComposite, guideInfluence: s.guideInfluence, cfg: 5, globalExplorationNoiseStrength: 0, noiseBrushActive: false, activeNoiseMask: null, localRejectionStrength: s.localRejection, updatesToAdvance: 1, phase: "finish", diffusionSteps: s.diffusionStepCount }) }).then(async (r) => { if (!r.ok) throw new Error(`Finish HTTP ${r.status}`); return r.json(); });
       set({ generatedImage: response.previewImage, diffusionStep: response.diffusionStep, diffusionSteps: response.diffusionSteps, generationStatus: "idle", prompt: snapshot.prompt, tick: s.tick + 1, errorMessage: null });
     } catch (error) {
       set({ generationStatus: "error", errorMessage: error instanceof Error ? error.message : "Finish failed" });
@@ -516,6 +521,14 @@ function App() {
               max={1}
               step={0.05}
               onChange={(v) => useApp.setState({ guideInfluence: v })}
+            />
+            <Slider
+              label="CFG / guidance"
+              value={s.cfg}
+              min={1}
+              max={20}
+              step={0.5}
+              onChange={(v) => useApp.setState({ cfg: v })}
             />
             <Slider
               label="Global exploration"

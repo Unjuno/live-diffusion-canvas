@@ -33,6 +33,7 @@ class Intervention(BaseModel):
     prompt: str = ""
     guideComposite: str | None = None
     guideInfluence: float = Field(0.5, ge=0, le=1)
+    cfg: float = Field(7.5, ge=1, le=20)
     globalExplorationNoiseStrength: float = Field(0.04, ge=0, le=1)
     noiseBrushActive: bool = False
     activeNoiseMask: str | None = None
@@ -140,11 +141,11 @@ def intervention(request: Intervention) -> RuntimeResponse:
                 except json.JSONDecodeError:
                     rejection_mask = None
             if session.real_state is None or len(session.real_state.timesteps) != request.diffusionSteps:
-                session.real_state = runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps, guide_composite=request.guideComposite, guide_influence=request.guideInfluence)
+                session.real_state = runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps, guidance_scale=request.cfg, guide_composite=request.guideComposite, guide_influence=request.guideInfluence)
             elif (session.real_state.prompt != request.prompt or
                   session.real_state.guide_composite != request.guideComposite or
                   session.real_state.guide_influence != request.guideInfluence):
-                runtime.update_conditions(session.real_state, request.prompt, request.guideComposite, request.guideInfluence)
+                runtime.update_conditions(session.real_state, request.prompt, request.guideComposite, request.guideInfluence, request.cfg)
             image, latency_ms, step = runtime.advance(session.real_state, rejection_mask=rejection_mask, rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0, exploration_strength=request.globalExplorationNoiseStrength)
             if request.phase == "finish":
                 while step < len(session.real_state.timesteps):
