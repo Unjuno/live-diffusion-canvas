@@ -34,6 +34,7 @@ type State = {
   lastNoiseMask: [number, number][];
   runtimeSessionId: string | null;
   runtimeModel: string | null;
+  runtimeModelReady: boolean | null;
   snapshots: Snapshot[];
   tick: number;
   diffusionStep: number;
@@ -77,6 +78,7 @@ const useApp = create<State>((set, get) => ({
   lastNoiseMask: [],
   runtimeSessionId: null,
   runtimeModel: null,
+  runtimeModelReady: null,
   snapshots: [],
   tick: 0,
   diffusionStep: 0,
@@ -414,6 +416,8 @@ function App() {
           onChange={(e) => useApp.setState({
             backend: e.target.value,
             runtimeSessionId: null,
+            runtimeModel: null,
+            runtimeModelReady: null,
             generatedImage: null,
             diffusionStep: 0,
             diffusionSteps: 0,
@@ -616,9 +620,9 @@ function PersistenceBootstrap() {
     void fetch(`${RUNTIME_URL}/runtime/health`)
       .then((response) => response.ok ? response.json() : null)
       .then((health) => {
-        if (health?.model) useApp.setState({ runtimeModel: health.model });
+        if (health?.model) useApp.setState({ runtimeModel: health.model, runtimeModelReady: health.modelReady !== false });
       })
-      .catch(() => useApp.setState({ runtimeModel: null }));
+      .catch(() => useApp.setState({ runtimeModel: null, runtimeModelReady: null }));
   }, [s.backend]);
   const visibleSnapshots = s.backend === "tinysd"
     ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
@@ -646,7 +650,7 @@ function PersistenceBootstrap() {
       )}
       {s.backend === "tinysd" && (
         <span className="real-model-badge">
-          Real model route: {s.runtimeModel ?? "loading model info"} · MPS
+          Real model route: {s.runtimeModel ?? "loading model info"} · {s.runtimeModelReady === false ? "model files missing" : "MPS"}
         </span>
       )}
       <div className="snapshot-actions">

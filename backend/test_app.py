@@ -6,6 +6,7 @@ def test_health_reports_stateful_runtime():
     assert result["status"] == "ok"
     assert result["runtime"] == "mock-stateful"
     assert result["model"] == "mock-stateful-v0.1"
+    assert result["modelReady"] is True
 
 
 def test_intervention_advances_existing_session_and_preserves_request_id():

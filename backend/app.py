@@ -5,6 +5,7 @@ import json
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,13 +77,38 @@ real_runtime_lock = threading.Lock()
 runtime_snapshots: dict[str, object] = {}
 
 
+def _model_ready(model_id: str) -> bool:
+    """Return readiness without loading gigabytes of model weights."""
+    model_path = Path(model_id)
+    if model_path.exists():
+        return any((model_path / part).exists() for part in (
+            "unet/diffusion_pytorch_model.safetensors",
+            "unet/diffusion_pytorch_model.fp16.safetensors",
+            "unet/diffusion_pytorch_model.bin",
+        ))
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        return any(
+            try_to_load_from_cache(model_id, filename=filename, revision="main") is not None
+            for filename in (
+                "unet/diffusion_pytorch_model.safetensors",
+                "unet/diffusion_pytorch_model.fp16.safetensors",
+                "unet/diffusion_pytorch_model.bin",
+            )
+        )
+    except Exception:
+        return False
+
+
 @app.get("/runtime/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, str | bool]:
     real = os.getenv("DIFFUSION_REAL", "0") == "1"
+    model = os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd") if real else "mock-stateful-v0.1"
     return {
         "status": "ok",
         "runtime": "diffusers" if real else "mock-stateful",
-        "model": os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd") if real else "mock-stateful-v0.1",
+        "model": model,
+        "modelReady": _model_ready(model) if real else True,
     }
 
 
