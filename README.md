@@ -95,17 +95,50 @@ The first generation can download and load `segmind/tiny-sd`; subsequent
 requests reuse the loaded pipeline. The UI's real-model badge reports the
 runtime type, model, device, and readiness state.
 
-The model selector also includes Stable Diffusion 1.5, SD-Turbo, and SDXL
-base. Stable Diffusion 1.5 is verified on the 64 GB Apple Silicon machine.
-SD-Turbo and SDXL are experimental catalog entries: download their weights
-and run the regression suite before treating them as supported.
+Large model downloads are started independently from generation requests. In
+the UI, choose a model and press `Download model`; the request returns
+immediately, while the status is polled in the badge. The same operation is
+available from the API:
 
-Current support is explicit: TinySD and Stable Diffusion 1.5 support basic
+```bash
+curl -X POST http://127.0.0.1:8000/runtime/models/download \
+  -H 'content-type: application/json' \
+  -d '{"model":"stabilityai/sdxl-turbo"}'
+curl http://127.0.0.1:8000/runtime/models
+```
+
+Downloads use the Hugging Face cache and resume on retry or runtime restart.
+Status files and downloader logs are stored under
+`~/.cache/live-diffusion-canvas/model-downloads` by default; override this
+with `MODEL_DOWNLOAD_ROOT`. The download worker is intentionally separate
+from the HTTP timeout, so a multi-gigabyte model does not occupy a request.
+
+The model selector also includes Stable Diffusion 1.5, SD-Turbo, and SDXL
+base. TinySD, Stable Diffusion 1.5, and SDXL-Turbo have passed the current
+real-runtime midstream intervention regression on the 64 GB Apple Silicon
+machine. FLUX and SD 3.5 still require dedicated runtime work; the SDXL base
+verification is complete.
+
+Current support is explicit: TinySD, Stable Diffusion 1.5, SD-Turbo, and
+SDXL-Turbo and SDXL base support basic
 generation, stateful continuation, Guide Canvas, Noise Brush, and Snapshot
-restore/Finish. SD-Turbo and SDXL are listed but not yet verified. FLUX is not
-implemented in this runtime; it needs a separate `FluxPipeline` backend and
-must not be treated as an SD-compatible model swap. See the [model capability
+restore/Finish. SD-Turbo uses model-specific guidance handling. FLUX and SD3.5
+use dedicated Transformer adapters and must not be treated as SD-compatible
+model swaps. Their Hub repositories may require authorization. See the [model capability
 matrix](docs/sdd/research/model-compatibility.md) before selecting a model.
+
+FLUX.1 schnell and Stable Diffusion 3.5 Medium are gated on Hugging Face. To
+run them locally, accept each model's license on its Hub page and provide an
+authorized token to the real-runtime process, for example:
+
+```bash
+export HF_TOKEN=hf_...
+DIFFUSION_REAL=1 .venv-real/bin/uvicorn backend.app:app --host 127.0.0.1 --port 8000
+```
+
+The UI's `Download model` action then starts the resumable download in the
+background. It reports an authorization error instead of marking a gated
+model ready when access has not been granted.
 
 The catalog and local readiness can be inspected without loading weights:
 

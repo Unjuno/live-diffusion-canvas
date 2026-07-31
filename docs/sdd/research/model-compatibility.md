@@ -11,9 +11,22 @@ or benchmarked locally.
 - `stable-diffusion-v1-5/stable-diffusion-v1-5`: downloaded into the local
   cache and verified through the real FastAPI runtime on Apple MPS. One
   stateful preview request completed successfully at 512x512.
-- SD-Turbo and SDXL remain catalog candidates. They are deliberately exposed
-  as experimental choices, but are not called supported until their weights
-  and stateful intervention regressions have been completed.
+- `stabilityai/sdxl-turbo`: downloaded into the local cache and verified
+  through the real FastAPI runtime on Apple MPS with the 16-frame midstream
+  intervention regression. The SDXL VAE is decoded in float32 to avoid the
+  black-preview failure observed with fp16 decoding.
+- `stabilityai/sd-turbo`: downloaded through the background worker and
+  verified on Apple MPS with the 16-frame intervention regression and
+  Snapshot/Restore/Finish. It uses guidance=1 internally because it is
+  guidance-distilled.
+- `stabilityai/stable-diffusion-xl-base-1.0`: downloaded through the
+  background worker and verified on Apple MPS with the 16-frame intervention
+  regression and Snapshot/Restore/Finish.
+- `black-forest-labs/FLUX.1-schnell`: dedicated Transformer runtime adapter is
+  implemented, but the Hub repository is gated and returned HTTP 403 here.
+- `stabilityai/stable-diffusion-3.5-medium`: dedicated Transformer runtime
+  adapter is implemented, but the Hub repository is gated and returned HTTP
+  403 here.
 
 ## Compatibility matrix
 
@@ -21,11 +34,11 @@ or benchmarked locally.
 |---|---:|---:|---:|---:|---:|---|
 | TinySD | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified |
 | Stable Diffusion 1.5 | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified on Apple MPS |
-| SD-Turbo | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
-| SDXL-Turbo | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
-| SDXL base | Not downloaded | Not tested | Not tested | Not tested | Not tested | Experimental catalog entry |
-| FLUX.1 schnell/dev | Not downloaded | Not tested | Not tested | Not tested | Not tested | Dedicated Flux runtime required |
-| Stable Diffusion 3.5 Medium | Not downloaded | Not tested | Not tested | Not tested | Not tested | Dedicated MMDiT runtime required |
+| SD-Turbo | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified on Apple MPS |
+| SDXL-Turbo | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified on Apple MPS |
+| SDXL base | Yes | Yes | Yes, weak latent bias | Yes | Yes | Verified on Apple MPS |
+| FLUX.1 schnell/dev | Adapter ready; weights gated | Pending | Pending | Pending | Pending | HF authorization required |
+| Stable Diffusion 3.5 Medium | Adapter ready; weights gated | Pending | Pending | Pending | Pending | HF authorization required |
 
 “Verified” means the same runtime contract was exercised: generated frames
 changed, one session continued across intervention, Guide Canvas and Noise
@@ -55,6 +68,6 @@ the stateful session contract.
 
 ## Verification rule
 
-A candidate is not considered supported until it passes the same regression
-scenarios as TinySD: prompt difference, guide difference, brush difference,
-continued exploration, non-black previews, and snapshot restore equality.
+A candidate is not considered verified until it passes the same regression
+scenarios as TinySD. Gated candidates are not marked verified merely because
+their adapter imports successfully.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import json
+import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -82,6 +84,10 @@ sessions: dict[str, Session] = {}
 real_runtimes: dict[str, object] = {}
 real_runtime_lock = threading.Lock()
 runtime_snapshots: dict[str, object] = {}
+download_processes: dict[str, subprocess.Popen[bytes]] = {}
+download_lock = threading.Lock()
+DOWNLOAD_ROOT = Path(os.getenv("MODEL_DOWNLOAD_ROOT", Path.home() / ".cache/live-diffusion-canvas/model-downloads"))
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MODEL_CATALOG = (
     {"id": "segmind/tiny-sd", "label": "TinySD", "profile": "sd15-compatible"},
@@ -96,17 +102,23 @@ MODEL_CATALOG = (
 
 def _model_ready(model_id: str) -> bool:
     """Return whether the complete local model snapshot is available."""
+    model_profile = next((entry["profile"] for entry in MODEL_CATALOG if entry["id"] == model_id), "")
     model_path = Path(model_id)
     if model_path.exists():
         root = model_path
         has = lambda *parts: any((root / part).exists() for part in parts)
+        if model_profile in {"flux-experimental", "sd3-experimental"}:
+            return all((root / part).exists() for part in ("model_index.json", "scheduler/scheduler_config.json", "transformer/config.json", "vae/config.json")) and any((root / "transformer").glob("*.safetensors"))
         return all((root / part).exists() for part in ("model_index.json", "scheduler/scheduler_config.json", "unet/config.json", "vae/config.json")) and all((
             has("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.fp16.safetensors", "unet/diffusion_pytorch_model.bin"),
             has("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"),
-            has("text_encoder/model.safetensors", "text_encoder/pytorch_model.bin"),
+            has("text_encoder/model.safetensors", "text_encoder/model.fp16.safetensors", "text_encoder/pytorch_model.bin"),
         ))
     try:
         from huggingface_hub import try_to_load_from_cache
+        if model_profile in {"flux-experimental", "sd3-experimental"}:
+            required = (("model_index.json",), ("scheduler/scheduler_config.json",), ("transformer/config.json",), ("transformer/diffusion_pytorch_model.safetensors", "transformer/diffusion_pytorch_model.fp16.safetensors", "transformer/diffusion_pytorch_model.bin"))
+            return all(any(try_to_load_from_cache(model_id, filename=name, revision="main") is not None for name in alternatives) for alternatives in required)
         required = (
             ("model_index.json",),
             ("scheduler/scheduler_config.json",),
@@ -115,7 +127,7 @@ def _model_ready(model_id: str) -> bool:
             ("vae/config.json",),
             ("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"),
             ("text_encoder/config.json",),
-            ("text_encoder/model.safetensors", "text_encoder/pytorch_model.bin"),
+            ("text_encoder/model.safetensors", "text_encoder/model.fp16.safetensors", "text_encoder/pytorch_model.bin"),
             ("tokenizer/vocab.json",),
             ("tokenizer/merges.txt",),
             ("tokenizer/tokenizer_config.json",),
@@ -123,6 +135,52 @@ def _model_ready(model_id: str) -> bool:
         return all(any(try_to_load_from_cache(model_id, filename=name, revision="main") is not None for name in alternatives) for alternatives in required)
     except Exception:
         return False
+
+
+def _download_status(model_id: str) -> dict[str, object]:
+    status_path = DOWNLOAD_ROOT / (model_id.replace("/", "__") + ".json")
+    status: dict[str, object] = {}
+    if status_path.exists():
+        try:
+            status = json.loads(status_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            status = {}
+    with download_lock:
+        process = download_processes.get(model_id)
+        if process is not None and process.poll() is not None:
+            download_processes.pop(model_id, None)
+    return status
+
+
+class ModelDownloadRequest(BaseModel):
+    model: str
+
+
+@app.post("/runtime/models/download")
+def download_model(request: ModelDownloadRequest) -> dict[str, object]:
+    catalog_entry = next((entry for entry in MODEL_CATALOG if entry["id"] == request.model), None)
+    if catalog_entry is None:
+        raise HTTPException(status_code=404, detail=f"Model is not in the catalog: {request.model}")
+    if _model_ready(request.model):
+        return {"model": request.model, "status": "ready"}
+    status = _download_status(request.model)
+    with download_lock:
+        process = download_processes.get(request.model)
+        if process is not None and process.poll() is None:
+            return {**status, "model": request.model, "status": "downloading", "pid": process.pid}
+        DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+        log_path = DOWNLOAD_ROOT / (request.model.replace("/", "__") + ".log")
+        log = log_path.open("ab")
+        process = subprocess.Popen(
+            [sys.executable, str(REPO_ROOT / "scripts/download-model.py"), "--model", request.model, "--status-dir", str(DOWNLOAD_ROOT)],
+            cwd=REPO_ROOT,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        log.close()
+        download_processes[request.model] = process
+    return {"model": request.model, "status": "queued", "pid": process.pid}
 
 
 @app.get("/runtime/health")
@@ -140,10 +198,10 @@ def health(model: str | None = Query(default=None)) -> dict[str, str | bool]:
 
 
 @app.get("/runtime/models")
-def models() -> list[dict[str, str | bool]]:
+def models() -> list[dict[str, object]]:
     """Report selectable models and local readiness without loading weights."""
     real = os.getenv("DIFFUSION_REAL", "0") == "1"
-    return [{**entry, "modelReady": _model_ready(entry["id"]) if real else True} for entry in MODEL_CATALOG]
+    return [{**entry, "modelReady": _model_ready(entry["id"]) if real else True, "downloadStatus": _download_status(entry["id"]) if real else {"status": "ready"}} for entry in MODEL_CATALOG]
 
 
 @app.post("/runtime/session")
@@ -172,8 +230,8 @@ def intervention(request: Intervention) -> RuntimeResponse:
         with real_runtime_lock:
             runtime = real_runtimes.get(session.model)
             if runtime is None:
-                from backend.diffusion_runtime import TinySDRuntime
-                runtime = TinySDRuntime(session.model)
+                from backend.diffusion_runtime import TinySDRuntime, TransformerDiffusionRuntime
+                runtime = TransformerDiffusionRuntime(session.model) if session.model.startswith(("black-forest-labs/FLUX", "stabilityai/stable-diffusion-3")) else TinySDRuntime(session.model)
                 real_runtimes[session.model] = runtime
             rejection_mask = None
             if request.noiseBrushActive and request.activeNoiseMask:

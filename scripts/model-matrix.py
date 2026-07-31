@@ -26,7 +26,7 @@ def main() -> None:
     for model in get_models():
         model_id = model["id"]
         result = {"model": model_id, "label": model["label"], "profile": model["profile"]}
-        if not model["modelReady"] or model["profile"] not in {"sd15-compatible", "sdxl-compatible"}:
+        if not model["modelReady"] or model["profile"] not in {"sd15-compatible", "sdxl-compatible", "sdxl-experimental", "flux-experimental", "sd3-experimental"}:
             result.update({"status": "skipped", "reason": "weights unavailable or profile not implemented"})
             results.append(result)
             continue

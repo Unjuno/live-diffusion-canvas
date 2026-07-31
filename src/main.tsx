@@ -38,6 +38,7 @@ type State = {
   runtimeModel: string | null;
   runtimeModelReady: boolean | null;
   runtimeDevice: string | null;
+  runtimeDownloadStatus: string | null;
   snapshots: Snapshot[];
   tick: number;
   diffusionStep: number;
@@ -107,6 +108,7 @@ const useApp = create<State>((set, get) => ({
   runtimeModel: null,
   runtimeModelReady: null,
   runtimeDevice: null,
+  runtimeDownloadStatus: null,
   snapshots: [],
   tick: 0,
   diffusionStep: 0,
@@ -522,6 +524,7 @@ function App() {
             runtimeModel: null,
             runtimeModelReady: null,
             runtimeDevice: null,
+            runtimeDownloadStatus: null,
             generatedImage: null,
             diffusionStep: 0,
             diffusionSteps: 0,
@@ -540,7 +543,7 @@ function App() {
           name="model"
           aria-label="Model"
           value={s.model}
-          onChange={(e) => useApp.setState({ model: e.target.value, runtimeSessionId: null, generatedImage: null, diffusionStep: 0, diffusionSteps: 0, generationStatus: "idle", loopStatus: "paused" })}
+          onChange={(e) => useApp.setState({ model: e.target.value, runtimeSessionId: null, runtimeModelReady: null, runtimeDownloadStatus: null, generatedImage: null, diffusionStep: 0, diffusionSteps: 0, generationStatus: "idle", loopStatus: "paused" })}
         >
           <option value="mock-stateful-v0.1">Mock Stateful v0.1</option>
           <option value="segmind/tiny-sd">segmind/tiny-sd</option>
@@ -776,17 +779,25 @@ function PersistenceBootstrap() {
   }, []);
   useEffect(() => {
     if (s.backend !== "tinysd") return;
-    void fetch(`${RUNTIME_URL}/runtime/health?model=${encodeURIComponent(s.model)}`)
-      .then((response) => response.ok ? response.json() : null)
-      .then((health) => {
+    const refresh = () => Promise.all([
+      fetch(`${RUNTIME_URL}/runtime/health?model=${encodeURIComponent(s.model)}`).then((response) => response.ok ? response.json() : null),
+      fetch(`${RUNTIME_URL}/runtime/models`).then((response) => response.ok ? response.json() : []),
+    ]).then(([health, catalog]) => {
+        const selected = Array.isArray(catalog) ? catalog.find((entry) => entry?.id === s.model) : null;
         if (health?.model) useApp.setState({
           runtimeModel: health.model,
           runtimeModelReady: health.runtime === "diffusers" && health.modelReady !== false,
           runtimeDevice: health.device ?? null,
+          runtimeDownloadStatus: selected?.downloadStatus?.status ?? null,
           errorMessage: null,
         });
-      })
-      .catch(() => useApp.setState({ runtimeModel: null, runtimeModelReady: null, runtimeDevice: null }));
+      }).catch(() => useApp.setState({ runtimeModel: null, runtimeModelReady: null, runtimeDevice: null }));
+    void refresh();
+    const poll = window.setInterval(() => {
+      const status = useApp.getState().runtimeDownloadStatus;
+      if (status === "queued" || status === "downloading") void refresh();
+    }, 5000);
+    return () => window.clearInterval(poll);
   }, [s.backend, s.model]);
   const visibleSnapshots = s.backend === "tinysd"
     ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
@@ -817,10 +828,24 @@ function PersistenceBootstrap() {
           <span>
             {s.runtimeModelReady === true
               ? `Real model route: ${s.runtimeModel ?? "TinySD"} · ${s.runtimeDevice ?? "ready"}`
-              : "TinySD runtime is not ready. Mock Runtime is available."}
+              : "Selected real model is not ready. Download it in the background or use Mock Runtime."}
           </span>
           {s.runtimeModelReady !== true && (
-            <button onClick={() => void copyRuntimeSetupCommand()}>Copy setup command</button>
+            <>
+              <button
+                disabled={s.runtimeDownloadStatus === "queued" || s.runtimeDownloadStatus === "downloading"}
+                onClick={() => {
+                  useApp.setState({ runtimeDownloadStatus: "queued", errorMessage: null });
+                  void fetch(`${RUNTIME_URL}/runtime/models/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: s.model }) })
+                    .then((response) => response.ok ? response.json() : response.json().then((body) => { throw new Error(body?.detail ?? `HTTP ${response.status}`); }))
+                    .then((result) => useApp.setState({ runtimeDownloadStatus: result.status }))
+                    .catch((error) => useApp.setState({ runtimeDownloadStatus: "error", errorMessage: error instanceof Error ? error.message : "Model download failed" }));
+                }}
+              >
+                {s.runtimeDownloadStatus === "queued" || s.runtimeDownloadStatus === "downloading" ? "Downloading in background…" : "Download model"}
+              </button>
+              <button onClick={() => void copyRuntimeSetupCommand()}>Copy setup command</button>
+            </>
           )}
         </div>
       )}

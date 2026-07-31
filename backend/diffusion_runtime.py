@@ -11,7 +11,9 @@ import time
 from dataclasses import dataclass
 
 import torch
-from diffusers import DDIMScheduler, DiffusionPipeline
+from diffusers import DDIMScheduler, DiffusionPipeline, FluxPipeline, StableDiffusion3Pipeline
+from diffusers.pipelines.flux.pipeline_flux import calculate_shift, retrieve_timesteps as flux_retrieve_timesteps
+from diffusers.pipelines.stable_diffusion_3.pipeline_stable_diffusion_3 import retrieve_timesteps as sd3_retrieve_timesteps
 
 
 @dataclass
@@ -31,6 +33,14 @@ class DiffusionState:
     guidance_scale: float = 7.5
     requested_steps: int = 8
     exploration_cycle: int = 0
+    pooled_prompt_embeds: torch.Tensor | None = None
+    negative_pooled_prompt_embeds: torch.Tensor | None = None
+    text_ids: torch.Tensor | None = None
+    negative_text_ids: torch.Tensor | None = None
+    latent_image_ids: torch.Tensor | None = None
+    transformer_mode: str | None = None
+    height: int = 512
+    width: int = 512
 
     def clone(self) -> "DiffusionState":
         return DiffusionState(
@@ -49,6 +59,14 @@ class DiffusionState:
             guidance_scale=self.guidance_scale,
             requested_steps=self.requested_steps,
             exploration_cycle=self.exploration_cycle,
+            pooled_prompt_embeds=self.pooled_prompt_embeds.detach().clone() if self.pooled_prompt_embeds is not None else None,
+            negative_pooled_prompt_embeds=self.negative_pooled_prompt_embeds.detach().clone() if self.negative_pooled_prompt_embeds is not None else None,
+            text_ids=self.text_ids.detach().clone() if self.text_ids is not None else None,
+            negative_text_ids=self.negative_text_ids.detach().clone() if self.negative_text_ids is not None else None,
+            latent_image_ids=self.latent_image_ids.detach().clone() if self.latent_image_ids is not None else None,
+            transformer_mode=self.transformer_mode,
+            height=self.height,
+            width=self.width,
         )
 
 
@@ -77,18 +95,22 @@ class TinySDRuntime:
                         snapshot = Path(model_index).parent
                         required = (
                             "model_index.json", "scheduler/scheduler_config.json",
-                            "unet/config.json", "unet/diffusion_pytorch_model.safetensors",
-                            "vae/config.json", "vae/diffusion_pytorch_model.safetensors",
-                            "text_encoder/config.json", "text_encoder/model.safetensors",
+                            "unet/config.json", "vae/config.json",
+                            "text_encoder/config.json",
                             "tokenizer/vocab.json", "tokenizer/merges.txt",
                             "tokenizer/tokenizer_config.json",
                         )
-                        if all((snapshot / part).exists() for part in required):
+                        component_files = (
+                            ("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.fp16.safetensors"),
+                            ("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors"),
+                            ("text_encoder/model.safetensors", "text_encoder/model.fp16.safetensors"),
+                        )
+                        if all((snapshot / part).exists() for part in required) and all(any((snapshot / part).exists() for part in alternatives) for alternatives in component_files):
                             model_source = str(snapshot)
                 except Exception:
                     pass
             load_options = {"torch_dtype": self.dtype, "safety_checker": None}
-            if self.model_id in {"stabilityai/sdxl-turbo", "stabilityai/stable-diffusion-xl-base-1.0"}:
+            if self.model_id in {"stabilityai/sd-turbo", "stabilityai/sdxl-turbo", "stabilityai/stable-diffusion-xl-base-1.0"}:
                 load_options["variant"] = "fp16"
             self._pipe = DiffusionPipeline.from_pretrained(model_source, **load_options)
             # SD 1.5 repositories commonly default to PNDM. PNDM's warm-up
@@ -100,6 +122,12 @@ class TinySDRuntime:
             self._pipe = self._pipe.to(self.device)
             self._pipe.set_progress_bar_config(disable=True)
         return self._pipe
+
+    def _effective_guidance(self, requested: float) -> float:
+        # SD-Turbo is guidance-distilled. The positive branch is selected by
+        # CFG=1; applying the UI's ordinary SD1.5 CFG=7.5 overdrives it and
+        # produces the black previews caught by the real regression.
+        return 1.0 if self.model_id == "stabilityai/sd-turbo" else requested
 
     def _image_mask(self, composite: str | None, height: int, width: int) -> torch.Tensor | None:
         if not composite:
@@ -187,7 +215,7 @@ class TinySDRuntime:
             )
             pipe.scheduler.set_timesteps(steps, device=self.device)
             guide_mask = self._guide_mask(guide_composite, imported_image, guide_erase_mask, latents.shape[-2], latents.shape[-1])
-            return DiffusionState(prompt=prompt, latents=latents, prompt_embeds=positive, negative_prompt_embeds=negative, added_cond_kwargs=added, timesteps=pipe.scheduler.timesteps.detach().clone(), guide_mask=guide_mask, guide_influence=guide_influence, guide_composite=guide_composite, imported_image=imported_image, guide_erase_mask=guide_erase_mask, guidance_scale=guidance_scale, requested_steps=steps)
+            return DiffusionState(prompt=prompt, latents=latents, prompt_embeds=positive, negative_prompt_embeds=negative, added_cond_kwargs=added, timesteps=pipe.scheduler.timesteps.detach().clone(), guide_mask=guide_mask, guide_influence=guide_influence, guide_composite=guide_composite, imported_image=imported_image, guide_erase_mask=guide_erase_mask, guidance_scale=self._effective_guidance(guidance_scale), requested_steps=steps)
 
     def update_conditions(self, state: DiffusionState, prompt: str, guide_composite: str | None, imported_image: str | None, guide_erase_mask: str | None, guide_influence: float, guidance_scale: float) -> None:
         """Change conditions without throwing away the retained latent state."""
@@ -202,12 +230,19 @@ class TinySDRuntime:
             state.imported_image = imported_image
             state.guide_erase_mask = guide_erase_mask
             state.guide_influence = guide_influence
-            state.guidance_scale = guidance_scale
+            state.guidance_scale = self._effective_guidance(guidance_scale)
             state.guide_mask = self._guide_mask(guide_composite, imported_image, guide_erase_mask, state.latents.shape[-2], state.latents.shape[-1])
 
     def _preview(self, pipe, latents: torch.Tensor) -> str:
         with torch.no_grad():
-            decoded = pipe.vae.decode(latents / pipe.vae.config.scaling_factor, return_dict=False)[0]
+            # SDXL VAEs frequently overflow in fp16 on Apple MPS. Decode in
+            # float32 so an otherwise valid latent is not rendered as black.
+            decode_latents = latents
+            if self.model_id in {"stabilityai/sdxl-turbo", "stabilityai/stable-diffusion-xl-base-1.0"}:
+                decode_latents = latents.float()
+                pipe.vae.to(dtype=torch.float32)
+            decoded = pipe.vae.decode(decode_latents / pipe.vae.config.scaling_factor, return_dict=False)[0]
+        decoded = torch.nan_to_num(decoded, nan=0.0, posinf=1.0, neginf=-1.0)
         image = ((decoded / 2 + 0.5).clamp(0, 1) * 255).byte()[0].permute(1, 2, 0).cpu().numpy()
         from PIL import Image
         buffer = io.BytesIO()
@@ -324,3 +359,165 @@ class TinySDRuntime:
             state.latents = torch.nan_to_num(state.latents, nan=0.0, posinf=4.0, neginf=-4.0).clamp(-4.0, 4.0)
             state.step_index += 1
             return self._preview(pipe, preview_latents if preview_latents is not None else state.latents), round((time.perf_counter() - started) * 1000), state.step_index
+
+
+class TransformerDiffusionRuntime(TinySDRuntime):
+    """Stateful adapter for FLUX and Stable Diffusion 3 Transformer pipelines.
+
+    These models do not expose an SD UNet. Their packed/Transformer latents
+    are kept in the same session state, so the API still advances one denoise
+    step per request and can apply momentary guide/brush interventions.
+    """
+
+    def __init__(self, model_id: str) -> None:
+        super().__init__(model_id)
+        self.mode = "flux" if model_id.startswith("black-forest-labs/FLUX") else "sd3"
+
+    def _pipeline(self):
+        if self._pipe is None:
+            cls = FluxPipeline if self.mode == "flux" else StableDiffusion3Pipeline
+            self._pipe = cls.from_pretrained(self.model_id, torch_dtype=self.dtype, use_safetensors=True)
+            self._pipe = self._pipe.to(self.device)
+            self._pipe.set_progress_bar_config(disable=True)
+        return self._pipe
+
+    def _encode_transformer_prompt(self, pipe, prompt: str):
+        if self.mode == "flux":
+            positive, pooled, text_ids = pipe.encode_prompt(
+                prompt=prompt, prompt_2=prompt, device=self.device,
+                num_images_per_prompt=1, max_sequence_length=512,
+            )
+            return {
+                "positive": positive, "negative": None, "pooled": pooled,
+                "negative_pooled": None, "text_ids": text_ids,
+                "negative_text_ids": None,
+            }
+        positive, negative, pooled, negative_pooled = pipe.encode_prompt(
+            prompt=prompt, prompt_2=prompt, prompt_3=prompt,
+            negative_prompt="", negative_prompt_2="", negative_prompt_3="",
+            device=self.device, num_images_per_prompt=1,
+            do_classifier_free_guidance=True, max_sequence_length=256,
+        )
+        return {
+            "positive": positive, "negative": negative, "pooled": pooled,
+            "negative_pooled": negative_pooled, "text_ids": None,
+            "negative_text_ids": None,
+        }
+
+    def start(self, prompt: str, seed: int, steps: int = 8, guidance_scale: float = 7.5, guide_composite: str | None = None, imported_image: str | None = None, guide_erase_mask: str | None = None, guide_influence: float = 0.0) -> DiffusionState:
+        with self._lock:
+            pipe = self._pipeline()
+            height = width = 512
+            encoded = self._encode_transformer_prompt(pipe, prompt)
+            generator = torch.Generator(device="cpu").manual_seed(seed)
+            channels = pipe.transformer.config.in_channels // 4 if self.mode == "flux" else pipe.transformer.config.in_channels
+            prepared = pipe.prepare_latents(1, channels, height, width, encoded["positive"].dtype, self.device, generator)
+            if self.mode == "flux":
+                latents, image_ids = prepared
+                image_seq_len = latents.shape[1]
+                mu = calculate_shift(image_seq_len, pipe.scheduler.config.get("base_image_seq_len", 256), pipe.scheduler.config.get("max_image_seq_len", 4096), pipe.scheduler.config.get("base_shift", 0.5), pipe.scheduler.config.get("max_shift", 1.15))
+                timesteps, _ = flux_retrieve_timesteps(pipe.scheduler, steps, self.device, mu=mu)
+            else:
+                latents, image_ids = prepared, None
+                timesteps, _ = sd3_retrieve_timesteps(pipe.scheduler, steps, self.device)
+            guide_mask = self._guide_mask(guide_composite, imported_image, guide_erase_mask, latents.shape[-2] if latents.ndim == 4 else height // 8, latents.shape[-1] if latents.ndim == 4 else width // 8)
+            return DiffusionState(
+                prompt=prompt, latents=latents, prompt_embeds=encoded["positive"],
+                negative_prompt_embeds=encoded["negative"] if encoded["negative"] is not None else encoded["positive"].detach().clone(),
+                pooled_prompt_embeds=encoded["pooled"], negative_pooled_prompt_embeds=encoded["negative_pooled"],
+                text_ids=encoded["text_ids"], negative_text_ids=encoded["negative_text_ids"], latent_image_ids=image_ids,
+                timesteps=timesteps.detach().clone(), step_index=0, guide_mask=guide_mask,
+                guide_influence=guide_influence, guide_composite=guide_composite, imported_image=imported_image,
+                guide_erase_mask=guide_erase_mask, guidance_scale=guidance_scale, requested_steps=steps,
+                transformer_mode=self.mode, height=height, width=width,
+            )
+
+    def update_conditions(self, state: DiffusionState, prompt: str, guide_composite: str | None, imported_image: str | None, guide_erase_mask: str | None, guide_influence: float, guidance_scale: float) -> None:
+        with self._lock:
+            encoded = self._encode_transformer_prompt(self._pipeline(), prompt)
+            state.prompt = prompt
+            state.prompt_embeds = encoded["positive"]
+            state.negative_prompt_embeds = encoded["negative"] if encoded["negative"] is not None else encoded["positive"].detach().clone()
+            state.pooled_prompt_embeds = encoded["pooled"]
+            state.negative_pooled_prompt_embeds = encoded["negative_pooled"]
+            state.text_ids, state.negative_text_ids = encoded["text_ids"], encoded["negative_text_ids"]
+            state.guide_composite, state.imported_image, state.guide_erase_mask = guide_composite, imported_image, guide_erase_mask
+            state.guide_influence, state.guidance_scale = guide_influence, guidance_scale
+            h, w = (state.latents.shape[-2], state.latents.shape[-1]) if state.latents.ndim == 4 else (state.height // 8, state.width // 8)
+            state.guide_mask = self._guide_mask(guide_composite, imported_image, guide_erase_mask, h, w)
+
+    def _intervention_mask(self, state: DiffusionState, points: list[list[float]] | None, strength: float, temperature: float) -> torch.Tensor | None:
+        if not points or strength <= 0:
+            return None
+        if state.latents.ndim == 4:
+            mask = torch.zeros((1, 1, state.latents.shape[-2], state.latents.shape[-1]), device=self.device, dtype=state.latents.dtype)
+            radius = max(1, round(self._brush_size / 12)) if hasattr(self, "_brush_size") else 3
+            for point in points:
+                if len(point) >= 2:
+                    x = min(max(int(float(point[0]) / 100 * mask.shape[-1]), 0), mask.shape[-1] - 1)
+                    y = min(max(int(float(point[1]) / 100 * mask.shape[-2]), 0), mask.shape[-2] - 1)
+                    mask[:, :, max(0, y-radius):min(mask.shape[-2], y+radius+1), max(0, x-radius):min(mask.shape[-1], x+radius+1)] = 1
+            return mask
+        # FLUX stores 2x2-packed tokens. Map the brush to the token grid.
+        grid = int(state.latents.shape[1] ** 0.5)
+        mask = torch.zeros((1, 1, grid, grid), device=self.device, dtype=state.latents.dtype)
+        for point in points:
+            if len(point) >= 2:
+                x = min(max(int(float(point[0]) / 100 * grid), 0), grid - 1)
+                y = min(max(int(float(point[1]) / 100 * grid), 0), grid - 1)
+                mask[:, :, max(0, y-2):min(grid, y+3), max(0, x-2):min(grid, x+3)] = 1
+        return mask.flatten(2).transpose(1, 2)
+
+    def advance(self, state: DiffusionState, rejection_mask: list[list[float]] | None = None, rejection_strength: float = 0.0, exploration_strength: float = 0.04, temperature: float = 0.7, brush_size: int = 34) -> tuple[str, int, int]:
+        started = time.perf_counter()
+        with self._lock:
+            pipe = self._pipeline()
+            self._brush_size = brush_size
+            if state.step_index >= len(state.timesteps):
+                state.exploration_cycle += 1
+                state.latents = state.latents + torch.randn_like(state.latents) * min(max(temperature, 0.0), 2.0) * max(exploration_strength, 0.01) * 0.1
+                state.step_index = max(0, len(state.timesteps) - 2)
+                self._reset_scheduler(pipe, state.requested_steps)
+            timestep = state.timesteps[state.step_index]
+            if self.mode == "flux":
+                model_input = state.latents
+                timestep_input = timestep.expand(model_input.shape[0]).to(model_input.dtype) / 1000
+                kwargs = dict(hidden_states=model_input, timestep=timestep_input, pooled_projections=state.pooled_prompt_embeds, encoder_hidden_states=state.prompt_embeds, txt_ids=state.text_ids, img_ids=state.latent_image_ids, joint_attention_kwargs={}, return_dict=False)
+                if getattr(pipe.transformer.config, "guidance_embeds", False):
+                    kwargs["guidance"] = torch.full((model_input.shape[0],), state.guidance_scale, device=self.device, dtype=model_input.dtype)
+                with torch.no_grad():
+                    noise = pipe.transformer(**kwargs)[0]
+            else:
+                model_input = torch.cat([state.latents] * 2)
+                timestep_input = timestep.expand(model_input.shape[0])
+                with torch.no_grad():
+                    noise = pipe.transformer(hidden_states=model_input, timestep=timestep_input, encoder_hidden_states=torch.cat([state.negative_prompt_embeds, state.prompt_embeds]), pooled_projections=torch.cat([state.negative_pooled_prompt_embeds, state.pooled_prompt_embeds]), joint_attention_kwargs={}, return_dict=False)[0]
+                uncond, text = noise.chunk(2)
+                noise = uncond + state.guidance_scale * (text - uncond)
+            state.latents = pipe.scheduler.step(noise, timestep, state.latents, return_dict=False)[0]
+            if state.guide_mask is not None and state.guide_influence > 0:
+                guide = state.guide_mask
+                if state.latents.ndim == 3:
+                    guide = torch.nn.functional.interpolate(guide, size=(int(state.latents.shape[1] ** 0.5), int(state.latents.shape[1] ** 0.5)), mode="nearest").flatten(2).transpose(1, 2)
+                state.latents = state.latents + guide * min(state.guide_influence, 1.0) * 0.02
+            mask = self._intervention_mask(state, rejection_mask, rejection_strength, temperature)
+            if mask is not None:
+                noise = torch.randn_like(state.latents) * min(max(temperature, 0.0), 2.0)
+                state.latents = state.latents * (1 - mask * 0.5) + (state.latents + noise * 0.1) * (mask * 0.5)
+            state.latents = torch.nan_to_num(state.latents, nan=0.0, posinf=4.0, neginf=-4.0).clamp(-4.0, 4.0)
+            state.step_index += 1
+            return self._preview(pipe, state.latents), round((time.perf_counter() - started) * 1000), state.step_index
+
+    def _preview(self, pipe, latents: torch.Tensor) -> str:
+        with torch.no_grad():
+            if self.mode == "flux":
+                decoded_latents = pipe._unpack_latents(latents, self.height, self.width, pipe.vae_scale_factor)
+                decoded_latents = decoded_latents / pipe.vae.config.scaling_factor + pipe.vae.config.shift_factor
+            else:
+                decoded_latents = latents / pipe.vae.config.scaling_factor + getattr(pipe.vae.config, "shift_factor", 0.0)
+            decoded = pipe.vae.decode(decoded_latents.float(), return_dict=False)[0]
+        decoded = torch.nan_to_num(decoded, nan=0.0, posinf=1.0, neginf=-1.0)
+        image = ((decoded / 2 + 0.5).clamp(0, 1) * 255).byte()[0].permute(1, 2, 0).cpu().numpy()
+        from PIL import Image
+        buffer = io.BytesIO(); Image.fromarray(image).save(buffer, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
