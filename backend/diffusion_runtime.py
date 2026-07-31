@@ -408,6 +408,7 @@ class TransformerDiffusionRuntime(TinySDRuntime):
         with self._lock:
             pipe = self._pipeline()
             height = width = 512
+            self.height, self.width = height, width
             encoded = self._encode_transformer_prompt(pipe, prompt)
             generator = torch.Generator(device="cpu").manual_seed(seed)
             channels = pipe.transformer.config.in_channels // 4 if self.mode == "flux" else pipe.transformer.config.in_channels
@@ -515,7 +516,7 @@ class TransformerDiffusionRuntime(TinySDRuntime):
                 decoded_latents = decoded_latents / pipe.vae.config.scaling_factor + pipe.vae.config.shift_factor
             else:
                 decoded_latents = latents / pipe.vae.config.scaling_factor + getattr(pipe.vae.config, "shift_factor", 0.0)
-            decoded = pipe.vae.decode(decoded_latents.float(), return_dict=False)[0]
+            decoded = pipe.vae.decode(decoded_latents.to(dtype=pipe.vae.dtype), return_dict=False)[0]
         decoded = torch.nan_to_num(decoded, nan=0.0, posinf=1.0, neginf=-1.0)
         image = ((decoded / 2 + 0.5).clamp(0, 1) * 255).byte()[0].permute(1, 2, 0).cpu().numpy()
         from PIL import Image

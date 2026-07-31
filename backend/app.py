@@ -117,8 +117,11 @@ def _model_ready(model_id: str) -> bool:
     try:
         from huggingface_hub import try_to_load_from_cache
         if model_profile in {"flux-experimental", "sd3-experimental"}:
-            required = (("model_index.json",), ("scheduler/scheduler_config.json",), ("transformer/config.json",), ("transformer/diffusion_pytorch_model.safetensors", "transformer/diffusion_pytorch_model.fp16.safetensors", "transformer/diffusion_pytorch_model.bin"))
-            return all(any(try_to_load_from_cache(model_id, filename=name, revision="main") is not None for name in alternatives) for alternatives in required)
+            required = (("model_index.json",), ("scheduler/scheduler_config.json",), ("transformer/config.json",))
+            config_ready = all(any(try_to_load_from_cache(model_id, filename=name, revision="main") is not None for name in alternatives) for alternatives in required)
+            transformer_root = Path(try_to_load_from_cache(model_id, filename="transformer/config.json", revision="main") or "").parent
+            transformer_weights = list(transformer_root.glob("diffusion_pytorch_model*.safetensors")) if transformer_root.exists() else []
+            return config_ready and bool(transformer_weights)
         required = (
             ("model_index.json",),
             ("scheduler/scheduler_config.json",),
