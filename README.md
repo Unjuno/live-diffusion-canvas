@@ -179,6 +179,19 @@ recorded as `skipped`, never as passing.
 
 ## How to use the application
 
+The desktop app starts its local FastAPI runtime automatically on launch and
+stops it when the app exits. A normal development run uses `scripts/run-local.sh`,
+which starts both services. For a distributable macOS app with the Python
+runtime and TinySD model embedded, run:
+
+```bash
+./scripts/build-macos-full.sh
+```
+
+The regular lightweight bundle is only a UI shell and requires a separately
+installed Python runtime; use the self-contained build when the app must work
+without manually starting the backend.
+
 1. Enter or revise the prompt.
 2. Draw a positive guide, or import an image into Guide Canvas.
 3. Press `Run` to start the rolling exploration loop.

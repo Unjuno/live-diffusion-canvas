@@ -31,13 +31,15 @@ use std::{
 };
 use tauri::Manager;
 
+const RUNTIME_ADDRESS: &str = "127.0.0.1:8000";
+
 struct RuntimeProcess {
     child: Mutex<Option<Child>>,
 }
 
 fn runtime_is_running() -> bool {
     TcpStream::connect_timeout(
-        &"127.0.0.1:8000".parse().expect("valid runtime address"),
+        &RUNTIME_ADDRESS.parse().expect("valid runtime address"),
         Duration::from_millis(250),
     )
     .is_ok()
@@ -109,9 +111,24 @@ fn start_packaged_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::error
                     .lock()
                     .map_err(|_| "runtime process lock poisoned")? = Some(child);
             }
-            eprintln!("Started packaged local diffusion runtime.");
+            for _ in 0..60 {
+                if runtime_is_running() {
+                    eprintln!("Started packaged local diffusion runtime at {RUNTIME_ADDRESS}.");
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            if let Some(process) = app.try_state::<RuntimeProcess>() {
+                if let Ok(mut child) = process.child.lock() {
+                    if let Some(child) = child.as_mut() {
+                        let _ = child.kill();
+                    }
+                    *child = None;
+                }
+            }
+            eprintln!("Packaged diffusion runtime did not become ready at {RUNTIME_ADDRESS}.");
         }
-        Err(error) => eprintln!("Could not start packaged runtime: {error}"),
+        Err(error) => eprintln!("Could not start packaged runtime: {error}. Build the self-contained app with scripts/build-macos-full.sh."),
     }
     Ok(())
 }
