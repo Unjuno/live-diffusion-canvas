@@ -196,3 +196,11 @@ Starting Finish from Snapshot should stop Run loop and prevent concurrent Run lo
 v0.1 does not include a user-facing Step Mode or Step button.
 
 An internal one-tick runtime update function is allowed as implementation detail only.
+
+## D-022: Explore rewind depth and noise steps are explicit settings
+
+Explore keeps the existing global noise strength but also exposes two separate
+runtime controls: how many diffusion frames to rewind when reopening a cycle,
+and how many noise-step equivalents to use for the global re-noising pulse.
+This makes long-horizon exploration tunable without conflating rewind depth
+with noise magnitude.

@@ -49,6 +49,8 @@ The user can change:
 
 - CFG
 - Global Exploration Noise Strength
+- Exploration Rewind Frames
+- Exploration Noise Steps
 - Local Rejection Strength
 - Guide Influence
 - Seed

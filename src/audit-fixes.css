@@ -1,0 +1,22 @@
+.toolbar .prompt-input {
+  min-width: 300px;
+}
+
+.panel-head > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.panel-head button[aria-pressed="true"] {
+  background: #7c5cff;
+  border-color: #a793ff;
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  .toolbar .prompt-input {
+    min-width: 0;
+  }
+}

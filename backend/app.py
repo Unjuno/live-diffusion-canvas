@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 import json
+import subprocess
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -23,6 +26,7 @@ app.add_middleware(
 
 class SessionRequest(BaseModel):
     seed: int = 42
+    model: str | None = None
 
 
 class Intervention(BaseModel):
@@ -30,11 +34,18 @@ class Intervention(BaseModel):
     sessionId: str
     prompt: str = ""
     guideComposite: str | None = None
+    importedImage: str | None = None
+    guideEraseMask: str | None = None
     guideInfluence: float = Field(0.5, ge=0, le=1)
+    cfg: float = Field(7.5, ge=1, le=20)
     globalExplorationNoiseStrength: float = Field(0.04, ge=0, le=1)
+    explorationRewindFrames: int = Field(2, ge=1, le=20)
+    explorationNoiseSteps: int = Field(1, ge=1, le=8)
+    temperature: float = Field(0.7, ge=0, le=2)
     noiseBrushActive: bool = False
     activeNoiseMask: str | None = None
     localRejectionStrength: float = Field(0.7, ge=0, le=1)
+    brushSize: int = Field(34, ge=10, le=80)
     updatesToAdvance: int = Field(1, ge=1, le=3)
     phase: str = "explore"
     diffusionSteps: int = Field(8, ge=4, le=20)
@@ -66,56 +77,209 @@ class SnapshotResponse(BaseModel):
 @dataclass
 class Session:
     seed: int
+    model: str = "segmind/tiny-sd"
     tick: int = 0
     real_state: object | None = None
 
 
 sessions: dict[str, Session] = {}
-real_runtime = None
+real_runtimes: dict[str, object] = {}
 real_runtime_lock = threading.Lock()
 runtime_snapshots: dict[str, object] = {}
+download_processes: dict[str, subprocess.Popen[bytes]] = {}
+download_lock = threading.Lock()
+DOWNLOAD_ROOT = Path(os.getenv("MODEL_DOWNLOAD_ROOT", Path.home() / ".cache/live-diffusion-canvas/model-downloads"))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+MODEL_CATALOG = (
+    {"id": "segmind/tiny-sd", "label": "TinySD", "profile": "sd15-compatible"},
+    {"id": "stable-diffusion-v1-5/stable-diffusion-v1-5", "label": "Stable Diffusion 1.5", "profile": "sd15-compatible"},
+    {"id": "stabilityai/sd-turbo", "label": "SD-Turbo", "profile": "sd15-compatible"},
+    {"id": "stabilityai/sdxl-turbo", "label": "SDXL-Turbo", "profile": "sdxl-compatible"},
+    {"id": "stabilityai/stable-diffusion-xl-base-1.0", "label": "SDXL base (experimental)", "profile": "sdxl-experimental"},
+    {"id": "black-forest-labs/FLUX.1-schnell", "label": "FLUX.1 schnell", "profile": "flux-experimental"},
+    {"id": "stabilityai/stable-diffusion-3.5-medium", "label": "Stable Diffusion 3.5 Medium", "profile": "sd3-experimental"},
+)
+
+
+def _model_ready(model_id: str) -> bool:
+    """Return whether the complete local model snapshot is available."""
+    model_profile = next((entry["profile"] for entry in MODEL_CATALOG if entry["id"] == model_id), "")
+    model_path = Path(model_id)
+    if model_path.exists():
+        root = model_path
+        has = lambda *parts: any((root / part).exists() for part in parts)
+        if model_profile in {"flux-experimental", "sd3-experimental"}:
+            return all((root / part).exists() for part in ("model_index.json", "scheduler/scheduler_config.json", "transformer/config.json", "vae/config.json")) and any((root / "transformer").glob("*.safetensors"))
+        return all((root / part).exists() for part in ("model_index.json", "scheduler/scheduler_config.json", "unet/config.json", "vae/config.json")) and all((
+            has("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.fp16.safetensors", "unet/diffusion_pytorch_model.bin"),
+            has("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"),
+            has("text_encoder/model.safetensors", "text_encoder/model.fp16.safetensors", "text_encoder/pytorch_model.bin"),
+        ))
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        if model_profile in {"flux-experimental", "sd3-experimental"}:
+            required = (("model_index.json",), ("scheduler/scheduler_config.json",), ("transformer/config.json",))
+            config_ready = all(any(try_to_load_from_cache(model_id, filename=name, revision="main") is not None for name in alternatives) for alternatives in required)
+            transformer_root = Path(try_to_load_from_cache(model_id, filename="transformer/config.json", revision="main") or "").parent
+            transformer_weights = list(transformer_root.glob("diffusion_pytorch_model*.safetensors")) if transformer_root.exists() else []
+            return config_ready and bool(transformer_weights)
+        required = (
+            ("model_index.json",),
+            ("scheduler/scheduler_config.json",),
+            ("unet/config.json",),
+            ("unet/diffusion_pytorch_model.safetensors", "unet/diffusion_pytorch_model.fp16.safetensors", "unet/diffusion_pytorch_model.bin"),
+            ("vae/config.json",),
+            ("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.bin"),
+            ("text_encoder/config.json",),
+            ("text_encoder/model.safetensors", "text_encoder/model.fp16.safetensors", "text_encoder/pytorch_model.bin"),
+            ("tokenizer/vocab.json",),
+            ("tokenizer/merges.txt",),
+            ("tokenizer/tokenizer_config.json",),
+        )
+        return all(any(try_to_load_from_cache(model_id, filename=name, revision="main") is not None for name in alternatives) for alternatives in required)
+    except Exception:
+        return False
+
+
+def _download_status(model_id: str) -> dict[str, object]:
+    status_path = DOWNLOAD_ROOT / (model_id.replace("/", "__") + ".json")
+    status: dict[str, object] = {}
+    if status_path.exists():
+        try:
+            status = json.loads(status_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            status = {}
+    with download_lock:
+        process = download_processes.get(model_id)
+        if process is not None and process.poll() is not None:
+            download_processes.pop(model_id, None)
+    return status
+
+
+class ModelDownloadRequest(BaseModel):
+    model: str
+
+
+@app.post("/runtime/models/download")
+def download_model(request: ModelDownloadRequest) -> dict[str, object]:
+    catalog_entry = next((entry for entry in MODEL_CATALOG if entry["id"] == request.model), None)
+    if catalog_entry is None:
+        raise HTTPException(status_code=404, detail=f"Model is not in the catalog: {request.model}")
+    if _model_ready(request.model):
+        return {"model": request.model, "status": "ready"}
+    status = _download_status(request.model)
+    with download_lock:
+        process = download_processes.get(request.model)
+        if process is not None and process.poll() is None:
+            return {**status, "model": request.model, "status": "downloading", "pid": process.pid}
+        DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+        log_path = DOWNLOAD_ROOT / (request.model.replace("/", "__") + ".log")
+        log = log_path.open("ab")
+        process = subprocess.Popen(
+            [sys.executable, str(REPO_ROOT / "scripts/download-model.py"), "--model", request.model, "--status-dir", str(DOWNLOAD_ROOT)],
+            cwd=REPO_ROOT,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        log.close()
+        download_processes[request.model] = process
+    return {"model": request.model, "status": "queued", "pid": process.pid}
 
 
 @app.get("/runtime/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "runtime": "tiny-sd" if os.getenv("DIFFUSION_REAL", "0") == "1" else "mock-stateful"}
+def health(model: str | None = Query(default=None)) -> dict[str, str | bool]:
+    real = os.getenv("DIFFUSION_REAL", "0") == "1"
+    active_model = (model or os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd")) if real else "mock-stateful-v0.1"
+    device = "mock" if not real else ("mps" if __import__("torch").backends.mps.is_available() else "cpu")
+    return {
+        "status": "ok",
+        "runtime": "diffusers" if real else "mock-stateful",
+        "model": active_model,
+        "modelReady": _model_ready(active_model) if real else True,
+        "device": device,
+    }
+
+
+@app.get("/runtime/models")
+def models() -> list[dict[str, object]]:
+    """Report selectable models and local readiness without loading weights."""
+    real = os.getenv("DIFFUSION_REAL", "0") == "1"
+    return [{**entry, "modelReady": _model_ready(entry["id"]) if real else True, "downloadStatus": _download_status(entry["id"]) if real else {"status": "ready"}} for entry in MODEL_CATALOG]
 
 
 @app.post("/runtime/session")
 def create_session(request: SessionRequest) -> dict[str, str | int]:
     runtime_name = "real" if os.getenv("DIFFUSION_REAL", "0") == "1" else "mock"
     session_id = f"{runtime_name}-{uuid.uuid4()}"
-    sessions[session_id] = Session(seed=request.seed)
+    configured_model = os.getenv("DIFFUSION_MODEL", "segmind/tiny-sd")
+    requested_model = request.model or configured_model
+    # A packaged app exposes the friendly Hub id in the UI but can point the
+    # runtime at a bundled local snapshot through DIFFUSION_MODEL.
+    if requested_model == "segmind/tiny-sd" and configured_model != "segmind/tiny-sd":
+        requested_model = configured_model
+    sessions[session_id] = Session(seed=request.seed, model=requested_model)
     return {"sessionId": session_id, "seed": request.seed}
 
 
 @app.post("/runtime/intervention", response_model=RuntimeResponse)
 def intervention(request: Intervention) -> RuntimeResponse:
-    session = sessions.setdefault(request.sessionId, Session(seed=42))
+    session = sessions.get(request.sessionId)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Runtime session not found: {request.sessionId}")
+    if os.getenv("DIFFUSION_REAL", "0") == "1" and not _model_ready(session.model):
+        raise HTTPException(status_code=409, detail=f"Model is not ready: {session.model}")
     session.tick += request.updatesToAdvance
     if os.getenv("DIFFUSION_REAL", "0") == "1":
-        global real_runtime
         with real_runtime_lock:
-            if real_runtime is None:
-                from backend.diffusion_runtime import TinySDRuntime
-                real_runtime = TinySDRuntime()
+            runtime = real_runtimes.get(session.model)
+            if runtime is None:
+                from backend.diffusion_runtime import TinySDRuntime, TransformerDiffusionRuntime
+                runtime = TransformerDiffusionRuntime(session.model) if session.model.startswith(("black-forest-labs/FLUX", "stabilityai/stable-diffusion-3")) else TinySDRuntime(session.model)
+                real_runtimes[session.model] = runtime
             rejection_mask = None
             if request.noiseBrushActive and request.activeNoiseMask:
                 try:
                     rejection_mask = json.loads(request.activeNoiseMask)
                 except json.JSONDecodeError:
                     rejection_mask = None
-            if session.real_state is None or session.real_state.prompt != request.prompt or len(session.real_state.timesteps) != request.diffusionSteps or session.real_state.guide_composite != request.guideComposite or session.real_state.guide_influence != request.guideInfluence:
-                session.real_state = real_runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps, guide_composite=request.guideComposite, guide_influence=request.guideInfluence)
-            image, latency_ms, step = real_runtime.advance(session.real_state, rejection_mask=rejection_mask, rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0, exploration_strength=request.globalExplorationNoiseStrength)
+            if session.real_state is None or session.real_state.requested_steps != request.diffusionSteps:
+                session.real_state = runtime.start(request.prompt, session.seed + session.tick, steps=request.diffusionSteps, guidance_scale=request.cfg, guide_composite=request.guideComposite, imported_image=request.importedImage, guide_erase_mask=request.guideEraseMask, guide_influence=request.guideInfluence)
+            elif (session.real_state.prompt != request.prompt or
+                  session.real_state.guide_composite != request.guideComposite or
+                  session.real_state.imported_image != request.importedImage or
+                  session.real_state.guide_erase_mask != request.guideEraseMask or
+                  session.real_state.guide_influence != request.guideInfluence or
+                  session.real_state.guidance_scale != request.cfg):
+                runtime.update_conditions(session.real_state, request.prompt, request.guideComposite, request.importedImage, request.guideEraseMask, request.guideInfluence, request.cfg)
+            image = ""
+            latency_ms = 0
+            step = session.real_state.step_index
+            for _ in range(request.updatesToAdvance):
+                image, extra_latency, step = runtime.advance(
+                    session.real_state,
+                    rejection_mask=rejection_mask,
+                    rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0,
+                    exploration_strength=request.globalExplorationNoiseStrength,
+                    rewind_steps=request.explorationRewindFrames,
+                    noise_steps=request.explorationNoiseSteps,
+                    temperature=request.temperature,
+                    brush_size=request.brushSize,
+                )
+                latency_ms += extra_latency
             if request.phase == "finish":
                 while step < len(session.real_state.timesteps):
-                    image, extra_latency, step = real_runtime.advance(session.real_state, exploration_strength=0.0)
+                    image, extra_latency, step = runtime.advance(session.real_state, exploration_strength=0.0)
                     latency_ms += extra_latency
         return RuntimeResponse(requestId=request.requestId, sessionId=request.sessionId, previewImage=image, seed=session.seed, latencyMs=latency_ms, diffusionStep=step, diffusionSteps=len(session.real_state.timesteps))
-    accent = "f06b5d" if request.noiseBrushActive and request.activeNoiseMask else "7c5cff"
-    image = "data:image/svg+xml," + f"<svg xmlns='http://www.w3.org/2000/svg' width='900' height='600'><rect width='900' height='600' fill='%23{accent}'/><text x='40' y='80' fill='white' font-size='28'>FASTAPI STATE {session.tick}</text><text x='40' y='125' fill='white' font-size='18'>{request.prompt[:55]}</text></svg>"
-    return RuntimeResponse(requestId=request.requestId, sessionId=request.sessionId, previewImage=image, seed=session.seed, latencyMs=1)
+    accent = "f06b5d" if request.noiseBrushActive and request.activeNoiseMask else ("20c997" if request.guideComposite or request.importedImage else "7c5cff")
+    guide_marker = "GUIDE ACTIVE" if request.guideComposite or request.importedImage else "GUIDE OFF"
+    cx = 120 + ((session.tick * 47) % 660)
+    radius = 54 + int(max(0, min(request.temperature, 2)) * 18)
+    image = "data:image/svg+xml," + f"<svg xmlns='http://www.w3.org/2000/svg' width='900' height='600'><rect width='900' height='600' fill='%23{accent}'/><circle cx='{cx}' cy='330' r='{radius}' fill='%23f7d774' opacity='.8'/><path d='M70 490 Q300 {360 - (session.tick % 5) * 18} 480 470 T840 420' fill='none' stroke='white' stroke-width='12' opacity='.7'/><text x='40' y='80' fill='white' font-size='28'>FASTAPI STATE {session.tick}</text><text x='40' y='125' fill='white' font-size='18'>{request.prompt[:55]}</text><text x='40' y='170' fill='white' font-size='16'>{guide_marker} · TEMP {request.temperature:.1f}</text></svg>"
+    mock_step = ((session.tick - 1) % request.diffusionSteps) + 1
+    return RuntimeResponse(requestId=request.requestId, sessionId=request.sessionId, previewImage=image, seed=session.seed, latencyMs=1, diffusionStep=mock_step, diffusionSteps=request.diffusionSteps)
 
 
 @app.post("/runtime/finish", response_model=RuntimeResponse)
@@ -126,23 +290,32 @@ def finish(request: Intervention) -> RuntimeResponse:
 
 @app.post("/runtime/snapshot", response_model=SnapshotResponse)
 def save_runtime_snapshot(request: SnapshotRequest) -> SnapshotResponse:
-    session = sessions[request.sessionId]
+    session = sessions.get(request.sessionId)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Runtime session not found: {request.sessionId}")
     if session.real_state is None:
-        raise ValueError("Runtime session has no real state")
+        raise HTTPException(status_code=409, detail="Runtime session has no real diffusion state")
     snapshot_id = str(uuid.uuid4())
     runtime_snapshots[snapshot_id] = session.real_state.clone()
     state = runtime_snapshots[snapshot_id]
+    runtime = real_runtimes[session.model]
     with real_runtime_lock:
-        image = real_runtime._preview(real_runtime._pipeline(), state.latents)
+        image = runtime._preview(runtime._pipeline(), state.latents)
     return SnapshotResponse(snapshotId=snapshot_id, sessionId=request.sessionId, diffusionStep=state.step_index, diffusionSteps=len(state.timesteps), previewImage=image)
 
 
 @app.post("/runtime/snapshot/restore", response_model=SnapshotResponse)
 def restore_runtime_snapshot(request: SnapshotRequest) -> SnapshotResponse:
     if request.sessionId not in sessions or not request.snapshotId or request.snapshotId not in runtime_snapshots:
-        raise ValueError("Runtime snapshot not found")
+        raise HTTPException(status_code=404, detail="Runtime snapshot not found")
     state = runtime_snapshots[request.snapshotId].clone()
     sessions[request.sessionId].real_state = state
+    runtime = real_runtimes[sessions[request.sessionId].model]
     with real_runtime_lock:
-        image = real_runtime._preview(real_runtime._pipeline(), state.latents)
+        pipe = runtime._pipeline()
+        # The scheduler is mutable and may still point at the state that was
+        # active immediately before Restore. Reopen its history so the next
+        # Finish/Explore step follows the restored diffusion index.
+        runtime._reset_scheduler(pipe, state.requested_steps)
+        image = runtime._preview(pipe, state.latents)
     return SnapshotResponse(snapshotId=request.snapshotId, sessionId=request.sessionId, diffusionStep=state.step_index, diffusionSteps=len(state.timesteps), previewImage=image)

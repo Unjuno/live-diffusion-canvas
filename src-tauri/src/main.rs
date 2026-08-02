@@ -1,1 +1,3 @@
-fn main() { live_diffusion_canvas_lib::run(); }
+fn main() {
+    live_diffusion_canvas_lib::run();
+}

@@ -3,7 +3,7 @@
   "productName": "Live Diffusion Canvas",
   "version": "0.1.0",
   "identifier": "com.unjuno.live-diffusion-canvas",
-  "build": { "beforeDevCommand": "npm run dev", "beforeBuildCommand": "npm run build", "devUrl": "http://127.0.0.1:5173", "frontendDist": "../dist" },
+  "build": { "beforeDevCommand": "./scripts/run-local.sh", "beforeBuildCommand": "npm run build", "devUrl": "http://127.0.0.1:5173", "frontendDist": "../dist" },
   "app": { "windows": [{ "title": "Live Diffusion Canvas", "width": 1440, "height": 960, "minWidth": 1100, "minHeight": 720 }], "security": { "csp": null } },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png"] }
+  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png"], "resources": { "../backend": "backend", "../scripts/setup-real-runtime.sh": "setup-real-runtime.sh", "../docs/operations.md": "operations.md" } }
 }

@@ -1,7 +1,9 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
+const KonvaStroke = lazy(() => import("./KonvaStroke").then((module) => ({ default: module.KonvaStroke })));
 import "./styles.css";
+import "./audit-fixes.css";
 import "./real-model.css";
 import { makePreview } from "./runtime";
 import { clearSnapshots, loadSnapshots, persistSnapshot, type StoredSnapshot } from "./db";
@@ -18,7 +20,11 @@ type State = {
   errorMessage: string | null;
   guideInfluence: number;
   globalNoise: number;
+  explorationRewindFrames: number;
+  explorationNoiseSteps: number;
+  temperature: number;
   localRejection: number;
+  cfg: number;
   brushSize: number;
   updateInterval: number;
   seed: number;
@@ -33,7 +39,12 @@ type State = {
   activeNoiseMask: [number, number][];
   lastNoiseMask: [number, number][];
   runtimeSessionId: string | null;
+  runtimeModel: string | null;
+  runtimeModelReady: boolean | null;
+  runtimeDevice: string | null;
+  runtimeDownloadStatus: string | null;
   snapshots: Snapshot[];
+  selectedSnapshotId: string | null;
   tick: number;
   diffusionStep: number;
   diffusionSteps: number;
@@ -45,10 +56,32 @@ type State = {
   saveSnapshot(): Promise<void>;
   restoreSnapshot(snapshot: Snapshot): Promise<void>;
   finish(snapshot: Snapshot): Promise<void>;
+  resetSession(): void;
 };
 
 let runtimeRequestInFlight = false;
 const RUNTIME_URL = import.meta.env.VITE_RUNTIME_URL ?? "http://127.0.0.1:8000";
+
+async function runtimeJson<T>(url: string, init: RequestInit, timeoutMs = 120_000): Promise<T> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = body && typeof body === "object" && "detail" in body ? String(body.detail) : `HTTP ${response.status}`;
+      throw new Error(`Runtime request failed: ${detail}`);
+    }
+    return body as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(`Runtime request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
 
 const useApp = create<State>((set, get) => ({
   prompt: "a quiet architectural landscape at blue hour",
@@ -60,7 +93,11 @@ const useApp = create<State>((set, get) => ({
   errorMessage: null,
   guideInfluence: 0.5,
   globalNoise: 0.04,
+  explorationRewindFrames: 2,
+  explorationNoiseSteps: 1,
+  temperature: 0.7,
   localRejection: 0.7,
+  cfg: 7.5,
   brushSize: 34,
   updateInterval: 1200,
   seed: 42,
@@ -75,23 +112,48 @@ const useApp = create<State>((set, get) => ({
   activeNoiseMask: [],
   lastNoiseMask: [],
   runtimeSessionId: null,
+  runtimeModel: null,
+  runtimeModelReady: null,
+  runtimeDevice: null,
+  runtimeDownloadStatus: null,
   snapshots: [],
+  selectedSnapshotId: null,
   tick: 0,
   diffusionStep: 0,
   diffusionSteps: 0,
   diffusionStepCount: 8,
-  run: () =>
+  run: () => {
+    const current = get();
+    if (current.backend === "tinysd" && current.runtimeModelReady !== true) {
+      set({
+        loopStatus: "paused",
+        generationStatus: "error",
+        errorMessage: `${current.model} is not ready. Download the model files before running.`,
+      });
+      return;
+    }
     set({
       loopStatus: "running",
       generationPhase: "explore",
       errorMessage: null,
-    }),
+    });
+    void get().tickOnce();
+  },
   pause: () => set({ loopStatus: "paused" }),
   resume: () => set({ loopStatus: "running" }),
   tickOnce: async () => {
     if (runtimeRequestInFlight) return;
     runtimeRequestInFlight = true;
     const s = get();
+    if (s.backend === "tinysd" && s.runtimeModelReady !== true) {
+      runtimeRequestInFlight = false;
+      set({
+        generationStatus: "error",
+        loopStatus: "paused",
+        errorMessage: `${s.model} is not ready. Download the model files before running.`,
+      });
+      return;
+    }
     const tick = s.tick + 1;
     set({ generationStatus: "generating" });
     try {
@@ -106,15 +168,17 @@ const useApp = create<State>((set, get) => ({
       }
       let sessionId = s.runtimeSessionId;
       if (!sessionId) {
-        const session = await fetch(`${RUNTIME_URL}/runtime/session`, {
+        const session = await runtimeJson<{sessionId:string}>(`${RUNTIME_URL}/runtime/session`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ seed: s.seed }),
-        }).then((r) => r.json());
+          body: JSON.stringify({ seed: s.seed, model: s.model }),
+        });
         sessionId = session.sessionId;
         set({ runtimeSessionId: sessionId });
       }
-      const response = await fetch(
+      const response = await runtimeJson<{
+        previewImage:string; diffusionStep?:number; diffusionSteps?:number;
+      }>(
         `${RUNTIME_URL}/runtime/intervention`,
         {
           method: "POST",
@@ -124,22 +188,28 @@ const useApp = create<State>((set, get) => ({
             sessionId,
             prompt: s.prompt,
             guideComposite: s.guideComposite,
+            importedImage: s.guideImage,
+            guideEraseMask: s.guideEraseMask,
             guideInfluence: s.guideInfluence,
+            cfg: s.cfg,
             globalExplorationNoiseStrength: s.globalNoise,
+            explorationRewindFrames: s.explorationRewindFrames,
+            explorationNoiseSteps: s.explorationNoiseSteps,
+            temperature: s.temperature,
             noiseBrushActive: s.noiseBrushActive,
             activeNoiseMask: s.activeNoiseMask.length
               ? JSON.stringify(s.activeNoiseMask)
               : null,
             localRejectionStrength: s.localRejection,
+            brushSize: s.brushSize,
             updatesToAdvance: 1,
             phase: "explore",
             diffusionSteps: s.diffusionStepCount,
           }),
         },
-      ).then(async (r) => {
-        if (!r.ok) throw new Error(`Runtime HTTP ${r.status}`);
-        return r.json();
-      });
+      );
+      const latest = useApp.getState();
+      if (latest.backend !== s.backend || latest.runtimeSessionId !== sessionId) return;
       set({
         tick,
         generatedImage: response.previewImage,
@@ -149,11 +219,16 @@ const useApp = create<State>((set, get) => ({
         errorMessage: null,
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Runtime unavailable";
+      const sessionExpired = message.includes("Runtime session not found");
       set({
         generationStatus: "error",
-      errorMessage: error instanceof TypeError && error.message === "Failed to fetch"
+        runtimeSessionId: sessionExpired ? null : get().runtimeSessionId,
+        errorMessage: sessionExpired
+          ? "Runtime session expired. Resume to start a new stateful session."
+          : error instanceof TypeError && error.message === "Failed to fetch"
           ? `Runtime unavailable at ${RUNTIME_URL}. Start the FastAPI runtime.`
-          : error instanceof Error ? error.message : "Runtime unavailable",
+          : message,
         loopStatus: "paused",
       });
     } finally {
@@ -165,56 +240,84 @@ const useApp = create<State>((set, get) => ({
     if (!s.generatedImage) return;
     let runtimeSnapshotId: string | undefined;
     if (s.backend === "tinysd" && s.runtimeSessionId) {
-      const response = await fetch(`${RUNTIME_URL}/runtime/snapshot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: s.runtimeSessionId }) });
-      if (!response.ok) throw new Error(`Snapshot HTTP ${response.status}`);
-      runtimeSnapshotId = (await response.json()).snapshotId;
+      const response = await runtimeJson<{snapshotId:string}>(`${RUNTIME_URL}/runtime/snapshot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: s.runtimeSessionId }) });
+      runtimeSnapshotId = response.snapshotId;
     }
     const snapshot = {
       id: crypto.randomUUID(),
+      parentId: s.snapshots.length ? s.snapshots[s.snapshots.length - 1].id : undefined,
       createdAt: Date.now(),
       generatedImage: s.generatedImage,
+      generatedImageDataUrl: s.generatedImage,
       prompt: s.prompt,
       note: `Explore update ${s.tick}`,
+      selectedBackend: s.backend,
+      selectedModel: s.model,
       importedImage: s.guideImage ?? undefined,
+      importedImageDataUrl: s.guideImage ?? undefined,
       humanDrawLayer: s.drawPoints,
+      humanDrawLayerDataUrl: JSON.stringify(s.drawPoints),
       guideEraseMask: s.guideEraseMask ?? undefined,
+      guideEraseMaskDataUrl: s.guideEraseMask ?? undefined,
       guideComposite: s.guideComposite ?? undefined,
+      guideCompositeDataUrl: s.guideComposite ?? undefined,
       lastNoiseMask: s.lastNoiseMask,
       diffusionStepCount: s.diffusionStepCount,
       seed: s.seed,
+      cfg: s.cfg,
+      globalExplorationNoiseStrength: s.globalNoise,
+      explorationRewindFrames: s.explorationRewindFrames,
+      explorationNoiseSteps: s.explorationNoiseSteps,
+      localRejectionStrength: s.localRejection,
+      guideInfluence: s.guideInfluence,
+      temperature: s.temperature,
       runtimeSnapshotId,
       runtimeSessionId: s.backend === "tinysd" ? s.runtimeSessionId ?? undefined : undefined,
     };
-    void persistSnapshot(snapshot);
+    await persistSnapshot(snapshot);
     set({ snapshots: [...s.snapshots, snapshot] });
   },
   restoreSnapshot: async (snapshot) => {
     const s = get();
-    let generatedImage = snapshot.generatedImage;
+    let generatedImage = snapshot.generatedImageDataUrl ?? snapshot.generatedImage;
     let diffusionStep = s.diffusionStep;
     let diffusionSteps = s.diffusionSteps;
     if (s.backend === "tinysd" && snapshot.runtimeSnapshotId && s.runtimeSessionId === snapshot.runtimeSessionId) {
-      const response = await fetch(`${RUNTIME_URL}/runtime/snapshot/restore`, {
+      const response = await runtimeJson<{previewImage:string; diffusionStep:number; diffusionSteps:number}>(`${RUNTIME_URL}/runtime/snapshot/restore`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: s.runtimeSessionId, snapshotId: snapshot.runtimeSnapshotId }),
       });
-      if (!response.ok) throw new Error(`Restore HTTP ${response.status}`);
-      const runtimeSnapshot = await response.json();
-      generatedImage = runtimeSnapshot.previewImage;
-      diffusionStep = runtimeSnapshot.diffusionStep;
-      diffusionSteps = runtimeSnapshot.diffusionSteps;
+      generatedImage = response.previewImage;
+      diffusionStep = response.diffusionStep;
+      diffusionSteps = response.diffusionSteps;
     }
     set({
       generatedImage,
+      selectedSnapshotId: snapshot.id,
       prompt: snapshot.prompt,
+      backend: snapshot.selectedBackend ?? s.backend,
+      model: snapshot.selectedModel ?? s.model,
+      runtimeSessionId:
+        snapshot.selectedBackend && snapshot.selectedBackend !== s.backend
+          ? null
+          : snapshot.selectedModel && snapshot.selectedModel !== s.model
+            ? null
+            : s.runtimeSessionId,
       guideImage: snapshot.importedImage ?? null,
       drawPoints: snapshot.humanDrawLayer ?? [],
       guideEraseMask: snapshot.guideEraseMask ?? null,
-      guideErasePoints: snapshot.guideEraseMask ? JSON.parse(snapshot.guideEraseMask) : [],
+      guideErasePoints: parseGuideErasePoints(snapshot.guideEraseMask),
       guideComposite: snapshot.guideComposite ?? null,
       diffusionStepCount: snapshot.diffusionStepCount ?? s.diffusionStepCount,
       seed: snapshot.seed ?? s.seed,
+      cfg: snapshot.cfg ?? s.cfg,
+      globalNoise: snapshot.globalExplorationNoiseStrength ?? s.globalNoise,
+      explorationRewindFrames: snapshot.explorationRewindFrames ?? s.explorationRewindFrames,
+      explorationNoiseSteps: snapshot.explorationNoiseSteps ?? s.explorationNoiseSteps,
+      localRejection: snapshot.localRejectionStrength ?? s.localRejection,
+      guideInfluence: snapshot.guideInfluence ?? s.guideInfluence,
+      temperature: snapshot.temperature ?? s.temperature,
       diffusionStep,
       diffusionSteps,
       noiseBrushActive: false,
@@ -228,19 +331,47 @@ const useApp = create<State>((set, get) => ({
       loopStatus: "paused",
       generationStatus: "generating",
       generationPhase: "finish",
+      selectedSnapshotId: snapshot.id,
+      generatedImage: snapshot.generatedImageDataUrl ?? snapshot.generatedImage,
     });
     const s = get();
+    const finishGuideInfluence = snapshot.guideInfluence ?? s.guideInfluence;
+    const finishLocalRejection = Math.min(snapshot.localRejectionStrength ?? s.localRejection, 0.2);
     if (s.backend === "mock") {
-      set({ generatedImage: makePreview(s.tick + 1, s.seed, false), generationStatus: "idle", prompt: snapshot.prompt, tick: s.tick + 1 });
+      set({ generatedImage: makePreview(s.tick + 1, s.seed, false, snapshot.generatedImageDataUrl ?? snapshot.generatedImage), generationStatus: "idle", generationPhase: "finish", selectedSnapshotId: snapshot.id, prompt: snapshot.prompt, tick: s.tick + 1 });
       return;
     }
     try {
-      const response = await fetch(`${RUNTIME_URL}/runtime/finish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: s.tick + 1, sessionId: s.runtimeSessionId, prompt: snapshot.prompt, guideComposite: snapshot.guideComposite, guideInfluence: s.guideInfluence, globalExplorationNoiseStrength: 0, noiseBrushActive: false, activeNoiseMask: null, localRejectionStrength: s.localRejection, updatesToAdvance: 1, phase: "finish", diffusionSteps: s.diffusionStepCount }) }).then(async (r) => { if (!r.ok) throw new Error(`Finish HTTP ${r.status}`); return r.json(); });
-      set({ generatedImage: response.previewImage, diffusionStep: response.diffusionStep, diffusionSteps: response.diffusionSteps, generationStatus: "idle", prompt: snapshot.prompt, tick: s.tick + 1, errorMessage: null });
+      if (s.backend === "tinysd" && snapshot.runtimeSnapshotId && s.runtimeSessionId === snapshot.runtimeSessionId) {
+        await runtimeJson<{previewImage:string; diffusionStep:number; diffusionSteps:number}>(`${RUNTIME_URL}/runtime/snapshot/restore`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: s.runtimeSessionId, snapshotId: snapshot.runtimeSnapshotId }),
+        });
+      }
+      const response = await runtimeJson<{previewImage:string; diffusionStep:number; diffusionSteps:number}>(`${RUNTIME_URL}/runtime/finish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: s.tick + 1, sessionId: s.runtimeSessionId, prompt: snapshot.prompt, guideComposite: snapshot.guideComposite, importedImage: snapshot.importedImage, guideEraseMask: snapshot.guideEraseMask, guideInfluence: Math.min(Math.max(finishGuideInfluence, 0.3), 0.7), cfg: 5, globalExplorationNoiseStrength: 0, explorationRewindFrames: s.explorationRewindFrames, explorationNoiseSteps: s.explorationNoiseSteps, temperature: 0, noiseBrushActive: false, activeNoiseMask: null, localRejectionStrength: Math.max(finishLocalRejection, 0.05), updatesToAdvance: 12, phase: "finish", diffusionSteps: s.diffusionStepCount }) });
+      set({ generatedImage: response.previewImage, diffusionStep: response.diffusionStep, diffusionSteps: response.diffusionSteps, generationStatus: "idle", generationPhase: "finish", selectedSnapshotId: snapshot.id, prompt: snapshot.prompt, tick: s.tick + 1, errorMessage: null });
     } catch (error) {
       set({ generationStatus: "error", errorMessage: error instanceof Error ? error.message : "Finish failed" });
     }
   },
+  resetSession: () => set({
+    runtimeSessionId: null,
+    runtimeModel: null,
+    runtimeModelReady: null,
+    runtimeDevice: null,
+    generatedImage: null,
+    generationStatus: "idle",
+    generationPhase: "explore",
+    loopStatus: "idle",
+    errorMessage: null,
+    tick: 0,
+    diffusionStep: 0,
+    diffusionSteps: 0,
+    noiseBrushActive: false,
+    activeNoiseMask: [],
+    lastNoiseMask: [],
+  }),
 }));
 
 function Slider({
@@ -265,6 +396,7 @@ function Slider({
         <b>{value}</b>
       </span>
       <input
+        name={label.toLowerCase().replace(/\s+/g, "-")}
         type="range"
         min={min}
         max={max}
@@ -275,6 +407,48 @@ function Slider({
     </label>
   );
 }
+function guideCompositeFor(
+  points: [number, number][],
+  importedImage?: string | null,
+  erasePoints: [number, number][] = [],
+) {
+  const polyline = points.map((point) => point.join(",")).join(" ");
+  const image = importedImage
+    ?.replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;");
+  const eraseMask = erasePoints
+    .map(([x, y]) => `<circle cx="${x * 5.12}" cy="${y * 5.12}" r="20" fill="black"/>`)
+    .join("");
+  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><defs><mask id="guide-erase"><rect width="512" height="512" fill="white"/>${eraseMask}</mask></defs><rect width="512" height="512" fill="#0b1525"/>${image ? `<image href="${image}" x="0" y="0" width="512" height="512" preserveAspectRatio="none" mask="url(#guide-erase)"/>` : ""}<polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
+}
+
+function downloadGuideComposite(composite: string | null) {
+  if (!composite) return;
+  const link = document.createElement("a");
+  link.href = composite;
+  link.download = "live-diffusion-guide.svg";
+  link.click();
+}
+
+function parseGuideErasePoints(value: string | undefined): [number, number][] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (point): point is [number, number] =>
+        Array.isArray(point) && point.length >= 2 &&
+        typeof point[0] === "number" && typeof point[1] === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function copyRuntimeSetupCommand() {
+  await navigator.clipboard?.writeText("./scripts/setup-real-runtime.sh");
+}
+
 function Canvas({ guide = false }: { guide?: boolean }) {
   const s = useApp();
   const ref = useRef<HTMLDivElement>(null);
@@ -292,15 +466,11 @@ function Canvas({ guide = false }: { guide?: boolean }) {
       if (current.guideMode === "erase") {
         const erased = [...current.guideErasePoints, p];
         const visible = current.drawPoints.filter(([x, y]) => erased.every(([ex, ey]) => Math.hypot(x - ex, y - ey) > 8));
-        const polyline = visible.map((point) => point.join(",")).join(" ");
-        const guideComposite = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#0b1525"/><polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
-        useApp.setState({ guideErasePoints: erased, guideEraseMask: JSON.stringify(erased), guideComposite });
+        useApp.setState({ guideErasePoints: erased, guideEraseMask: JSON.stringify(erased), guideComposite: guideCompositeFor(visible, current.guideImage, erased) });
         return;
       }
       const points = [...current.drawPoints, p];
-      const polyline = points.map((point) => point.join(",")).join(" ");
-      const guideComposite = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#0b1525"/><polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
-      useApp.setState({ drawPoints: points, guideComposite });
+      useApp.setState({ drawPoints: points, guideComposite: guideCompositeFor(points, useApp.getState().guideImage, useApp.getState().guideErasePoints) });
     } else
       useApp.setState({
         activeNoiseMask: [...useApp.getState().activeNoiseMask, p],
@@ -338,9 +508,17 @@ function Canvas({ guide = false }: { guide?: boolean }) {
     <div
       ref={ref}
       className={`canvas ${guide ? "guide-canvas" : "generated-canvas"}`}
+      role="img"
+      aria-label={guide ? "Guide Canvas. Draw or erase a positive guide." : "Generated Image. Press and drag to reject a local solution."}
       onPointerDown={(e) => {
         setDrawing(true);
-        ref.current?.setPointerCapture(e.pointerId);
+        try {
+          ref.current?.setPointerCapture(e.pointerId);
+        } catch {
+          // Synthetic pointer events and some touch implementations do not
+          // expose an active pointer to capture. Drawing still works without
+          // capture; the real pointer path keeps capture for drag continuity.
+        }
         add(e);
       }}
       onPointerMove={add}
@@ -350,19 +528,21 @@ function Canvas({ guide = false }: { guide?: boolean }) {
       {!guide && s.generatedImage && (
         <img src={s.generatedImage} alt="Generated state preview" />
       )}
-      {guide && s.guideImage && <img src={s.guideImage} alt="Imported guide" />}
+      {guide && s.guideImage && (
+        <svg className="guide-image-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Imported guide image">
+          <defs>
+            <mask id="guide-import-mask">
+              <rect width="100" height="100" fill="white" />
+              {s.guideErasePoints.map(([x, y], index) => <circle key={index} cx={x} cy={y} r="4" fill="black" />)}
+            </mask>
+          </defs>
+          <image href={s.guideImage} x="0" y="0" width="100" height="100" preserveAspectRatio="none" mask="url(#guide-import-mask)" />
+        </svg>
+      )}
       <div className="grid" />
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-        {points.length > 1 && (
-          <polyline
-            points={points.map((p) => p.join(",")).join(" ")}
-            fill="none"
-            stroke={guide ? "#ffc857" : "#ff6b6b"}
-            strokeWidth={guide ? "1.2" : "2"}
-            strokeLinecap="round"
-          />
-        )}
-      </svg>
+      <Suspense fallback={null}>
+        <KonvaStroke points={points} guide={guide} brushSize={s.brushSize} />
+      </Suspense>
       <div className="canvas-label">
         {guide ? "DRAW GUIDE" : "HOLD TO REJECT"}
       </div>
@@ -396,57 +576,93 @@ function App() {
       </header>
       <section className="toolbar">
         <input
+          name="prompt"
+          className="prompt-input"
           aria-label="Prompt"
           value={s.prompt}
           onChange={(e) => useApp.setState({ prompt: e.target.value })}
         />
         <select
+          name="backend"
           aria-label="Backend"
           value={s.backend}
           onChange={(e) => useApp.setState({
             backend: e.target.value,
+            model: e.target.value === "mock" ? "mock-stateful-v0.1" : "segmind/tiny-sd",
             runtimeSessionId: null,
+            runtimeModel: null,
+            runtimeModelReady: null,
+            runtimeDevice: null,
+            runtimeDownloadStatus: null,
             generatedImage: null,
             diffusionStep: 0,
             diffusionSteps: 0,
+            generationStatus: "idle",
             loopStatus: "paused",
+            errorMessage: null,
           })}
         >
           <option value="mock">Mock Runtime</option>
           <option value="tinysd">TinySD · local Diffusers</option>
         </select>
-        <button className="primary" onClick={s.run}>
-          Run
+        <span className="toolbar-status" aria-live="polite">
+          {s.loopStatus === "running" ? "● Exploring" : s.loopStatus === "paused" ? "Ⅱ Paused" : "Ready"}
+        </span>
+        <select
+          name="model"
+          aria-label="Model"
+          value={s.model}
+          onChange={(e) => useApp.setState({ model: e.target.value, runtimeSessionId: null, runtimeModelReady: null, runtimeDownloadStatus: null, generatedImage: null, diffusionStep: 0, diffusionSteps: 0, generationStatus: "idle", loopStatus: "paused" })}
+        >
+          <option value="mock-stateful-v0.1">Mock Stateful v0.1</option>
+          <option value="segmind/tiny-sd">segmind/tiny-sd</option>
+          <option value="stable-diffusion-v1-5/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
+          <option value="stabilityai/sd-turbo">SD-Turbo · experimental</option>
+          <option value="stabilityai/sdxl-turbo">SDXL-Turbo · experimental</option>
+          <option value="stabilityai/stable-diffusion-xl-base-1.0">SDXL base · experimental</option>
+          <option value="black-forest-labs/FLUX.1-schnell">FLUX.1 schnell · experimental</option>
+          <option value="stabilityai/stable-diffusion-3.5-medium">Stable Diffusion 3.5 Medium · experimental</option>
+        </select>
+        <button className="primary" onClick={s.run} disabled={s.loopStatus === "running" || (s.backend === "tinysd" && s.runtimeModelReady !== true)}>
+          {s.loopStatus === "running" ? "Running…" : "Run"}
         </button>
         <button onClick={s.pause} disabled={s.loopStatus !== "running"}>Pause</button>
         <button onClick={s.resume} disabled={s.loopStatus !== "paused"}>Resume</button>
+        <button onClick={s.resetSession} disabled={s.generationStatus === "generating"}>Reset session</button>
       </section>
       <div className="workspace">
         <section className="panel">
-          <div className="panel-head">
-            <span>01 / GUIDE CANVAS</span>
-            <div>
-              <button onClick={() => useApp.setState({ guideMode: "draw" })}>Draw</button>
-              <button onClick={() => useApp.setState({ guideMode: "erase" })}>Erase</button>
-              <button onClick={() => useApp.setState({ drawPoints: [], guideErasePoints: [], guideEraseMask: null, guideComposite: null })}>Clear</button>
+            <div className="panel-head">
+              <span>01 / GUIDE CANVAS</span>
+              <div>
+                <button aria-pressed={s.guideMode === "draw"} onClick={() => useApp.setState({ guideMode: "draw" })}>Draw</button>
+                <button aria-pressed={s.guideMode === "erase"} onClick={() => useApp.setState({ guideMode: "erase" })}>Erase</button>
+                <button onClick={() => { const current = useApp.getState(); useApp.setState({ drawPoints: [], guideComposite: guideCompositeFor([], current.guideImage, current.guideErasePoints) }); }}>Clear draw</button>
+                <button onClick={() => { const current = useApp.getState(); useApp.setState({ guideErasePoints: [], guideEraseMask: null, guideComposite: guideCompositeFor(current.drawPoints, current.guideImage) }); }}>Reset erase</button>
+                <button onClick={() => downloadGuideComposite(s.guideComposite)} disabled={!s.guideComposite}>Export guide</button>
+              </div>
             </div>
-          </div>
           <Canvas guide />
           <p className="hint">
-            Draw a positive guide. Imported images remain separate from the
-            generated state.
+            Draw a positive guide or import a photo. The guide influences the
+            next denoise updates; it does not replace the generated state.
           </p>
           <label className="upload">
             ＋ Import guide image
             <input
+              name="guide-image"
               type="file"
               accept="image/*"
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) {
+                  if (!f.type.startsWith("image/") || f.size > 10 * 1024 * 1024) {
+                    useApp.setState({ generationStatus: "error", errorMessage: "Guide image must be an image file smaller than 10 MB." });
+                    return;
+                  }
                   const r = new FileReader();
-                  r.onload = () =>
-                    useApp.setState({ guideImage: String(r.result) });
+                  r.onerror = () => useApp.setState({ generationStatus: "error", errorMessage: "Guide image could not be read." });
+                  r.onload = () => { const imported = String(r.result); const current = useApp.getState(); useApp.setState({ guideImage: imported, guideComposite: guideCompositeFor(current.drawPoints, imported, current.guideErasePoints), errorMessage: null, generationStatus: "idle" }); };
                   r.readAsDataURL(f);
                 }
               }}
@@ -478,12 +694,44 @@ function App() {
               onChange={(v) => useApp.setState({ guideInfluence: v })}
             />
             <Slider
+              label="CFG / guidance"
+              value={s.cfg}
+              min={1}
+              max={20}
+              step={0.5}
+              onChange={(v) => useApp.setState({ cfg: v })}
+            />
+            <Slider
               label="Global exploration"
               value={s.globalNoise}
               min={0}
               max={0.1}
               step={0.01}
               onChange={(v) => useApp.setState({ globalNoise: v })}
+            />
+            <Slider
+              label="Rewind frames"
+              value={s.explorationRewindFrames}
+              min={1}
+              max={7}
+              step={1}
+              onChange={(v) => useApp.setState({ explorationRewindFrames: v })}
+            />
+            <Slider
+              label="Noise steps"
+              value={s.explorationNoiseSteps}
+              min={1}
+              max={4}
+              step={1}
+              onChange={(v) => useApp.setState({ explorationNoiseSteps: v })}
+            />
+            <Slider
+              label="Temperature / variation"
+              value={s.temperature}
+              min={0}
+              max={2}
+              step={0.1}
+              onChange={(v) => useApp.setState({ temperature: v })}
             />
             <Slider
               label="Local rejection"
@@ -513,6 +761,7 @@ function App() {
               <label>
                 Seed
                 <input
+                  name="seed"
                   type="number"
                   value={s.seed}
                   onChange={(e) =>
@@ -523,6 +772,7 @@ function App() {
               <label>
                 Interval
                 <input
+                  name="update-interval"
                   type="number"
                   value={s.updateInterval}
                   onChange={(e) =>
@@ -536,8 +786,11 @@ function App() {
             <div className="panel-head">
               <span>SNAPSHOT TIMELINE</span>
               <div>
-                <button onClick={s.saveSnapshot}>Save</button>
-                <button className="panel-action" onClick={() => void clearSnapshots().then(() => useApp.setState({ snapshots: [] }))} disabled={s.snapshots.length === 0}>Clear</button>
+                <button onClick={() => void s.saveSnapshot().catch((error) => useApp.setState({
+                  generationStatus: "error",
+                  errorMessage: error instanceof Error ? error.message : "Snapshot save failed",
+                }))} disabled={!s.generatedImage || s.generationStatus === "generating"} title={!s.generatedImage ? "Generate an image before saving a snapshot" : "Save the current generated state"}>Save</button>
+                <button className="panel-action" onClick={() => void clearSnapshots().then(() => useApp.setState({ snapshots: [], selectedSnapshotId: null }))} disabled={s.snapshots.length === 0}>Clear</button>
               </div>
             </div>
           {(s.backend === "tinysd"
@@ -552,16 +805,38 @@ function App() {
                 ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
                 : s.snapshots
               ).map((x, i) => (
-                <div className="snapshot" key={x.id}>
-                  <img src={x.generatedImage} />
+                <div
+                  className={`snapshot ${s.selectedSnapshotId === x.id ? "selected" : ""}`}
+                  key={x.id}
+                  onClick={() => useApp.setState({ selectedSnapshotId: x.id })}
+                >
+                  <img src={x.generatedImage} alt={`Snapshot ${String(i + 1).padStart(2, "0")}`} />
                   <div>
                     <b>Snapshot {String(i + 1).padStart(2, "0")}</b>
                     <small>{x.note}</small>
                   </div>
                   <button
-                    onClick={() => void useApp.getState().restoreSnapshot(x)}
+                    onClick={() => {
+                      useApp.setState({ selectedSnapshotId: x.id });
+                      void useApp.getState().restoreSnapshot(x).catch((error) => useApp.setState({
+                      generationStatus: "error",
+                      errorMessage: error instanceof Error ? error.message : "Restore failed",
+                      }));
+                    }}
                   >
                     Restore
+                  </button>
+                  <button
+                    onClick={() => {
+                      useApp.setState({ selectedSnapshotId: x.id });
+                      void useApp.getState().finish(x).catch((error) => useApp.setState({
+                      generationStatus: "error",
+                      errorMessage: error instanceof Error ? error.message : "Finish failed",
+                      }));
+                    }}
+                    disabled={s.generationStatus === "generating"}
+                  >
+                    Finish
                   </button>
                 </div>
               ))
@@ -597,6 +872,28 @@ function PersistenceBootstrap() {
   useEffect(() => {
     void loadSnapshots().then((snapshots) => useApp.setState({ snapshots }));
   }, []);
+  useEffect(() => {
+    if (s.backend !== "tinysd") return;
+    const refresh = () => Promise.all([
+      fetch(`${RUNTIME_URL}/runtime/health?model=${encodeURIComponent(s.model)}`).then((response) => response.ok ? response.json() : null),
+      fetch(`${RUNTIME_URL}/runtime/models`).then((response) => response.ok ? response.json() : []),
+    ]).then(([health, catalog]) => {
+        const selected = Array.isArray(catalog) ? catalog.find((entry) => entry?.id === s.model) : null;
+        if (health?.model) useApp.setState({
+          runtimeModel: health.model,
+          runtimeModelReady: health.runtime === "diffusers" && health.modelReady !== false,
+          runtimeDevice: health.device ?? null,
+          runtimeDownloadStatus: selected?.downloadStatus?.status ?? null,
+          errorMessage: null,
+        });
+      }).catch(() => useApp.setState({ runtimeModel: null, runtimeModelReady: null, runtimeDevice: null }));
+    void refresh();
+    const poll = window.setInterval(() => {
+      const status = useApp.getState().runtimeDownloadStatus;
+      if (status === "queued" || status === "downloading") void refresh();
+    }, 5000);
+    return () => window.clearInterval(poll);
+  }, [s.backend, s.model]);
   const visibleSnapshots = s.backend === "tinysd"
     ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
     : s.snapshots;
@@ -605,7 +902,16 @@ function PersistenceBootstrap() {
     if (latest) useApp.getState().finish(latest);
   };
   const restore = async () => {
-    if (latest) await useApp.getState().restoreSnapshot(latest);
+    if (latest) {
+      try {
+        await useApp.getState().restoreSnapshot(latest);
+      } catch (error) {
+        useApp.setState({
+          generationStatus: "error",
+          errorMessage: error instanceof Error ? error.message : "Restore failed",
+        });
+      }
+    }
   };
   return (
     <>
@@ -613,18 +919,31 @@ function PersistenceBootstrap() {
         <div className="runtime-error">Runtime error: {s.errorMessage}</div>
       )}
       {s.backend === "tinysd" && (
-        <span className="real-model-badge">
-          Real model route: segmind/tiny-sd · MPS
-        </span>
+        <div className={`real-model-badge ${s.runtimeModelReady === true ? "ready" : "needs-setup"}`}>
+          <span>
+            {s.runtimeModelReady === true
+              ? `Real model route: ${s.runtimeModel ?? "TinySD"} · ${s.runtimeDevice ?? "ready"}`
+              : "Selected real model is not ready. Download it in the background or use Mock Runtime."}
+          </span>
+          {s.runtimeModelReady !== true && (
+            <>
+              <button
+                disabled={s.runtimeDownloadStatus === "queued" || s.runtimeDownloadStatus === "downloading"}
+                onClick={() => {
+                  useApp.setState({ runtimeDownloadStatus: "queued", errorMessage: null });
+                  void fetch(`${RUNTIME_URL}/runtime/models/download`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: s.model }) })
+                    .then((response) => response.ok ? response.json() : response.json().then((body) => { throw new Error(body?.detail ?? `HTTP ${response.status}`); }))
+                    .then((result) => useApp.setState({ runtimeDownloadStatus: result.status }))
+                    .catch((error) => useApp.setState({ runtimeDownloadStatus: "error", errorMessage: error instanceof Error ? error.message : "Model download failed" }));
+                }}
+              >
+                {s.runtimeDownloadStatus === "queued" || s.runtimeDownloadStatus === "downloading" ? "Downloading in background…" : "Download model"}
+              </button>
+              <button onClick={() => void copyRuntimeSetupCommand()}>Copy setup command</button>
+            </>
+          )}
+        </div>
       )}
-      <div className="snapshot-actions">
-        <button onClick={restore} disabled={!latest}>
-          Restore latest
-        </button>
-        <button onClick={finish} disabled={!latest}>
-          Finish latest
-        </button>
-      </div>
     </>
   );
 }

@@ -1,8 +1,16 @@
 node_modules/
 .venv/
 .venv-real/
+.venv-backend-test/
 __pycache__/
 src-tauri/target/
 dist/
 *.tsbuildinfo
 .playwright-mcp/
+src-tauri/package-resources/
+artifacts/
+.pytest_cache/
+.DS_Store
+.env
+.env.*
+!.env.example
