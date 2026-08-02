@@ -1,2 +1,2 @@
--r requirements.txt
-pytest>=8.0
+-r requirements-test.txt
+# Install backend/requirements-real.txt separately for TinySD/Diffusers work.

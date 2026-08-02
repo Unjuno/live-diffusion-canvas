@@ -1,5 +1,11 @@
 # Live Diffusion Canvas
 
+[![CI](https://github.com/Unjuno/live-diffusion-canvas/actions/workflows/ci.yml/badge.svg)](https://github.com/Unjuno/live-diffusion-canvas/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
+> Status: experimental v0.1 prototype. The Mock Runtime is the supported
+> development path; real-model support is local and hardware/model dependent.
+
 Live Diffusion Canvas is a local application for exploring and steering
 intermediate diffusion states. It is designed around a rolling diffusion
 session, not one-shot prompt-to-final-image generation.
@@ -33,12 +39,14 @@ For Mock Runtime development:
 - Node.js 22 or newer
 - npm
 
-For running the Python test suite locally, install the development requirements:
+For the lightweight Python test suite locally, use the repository helper:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements-dev.txt
+./scripts/test-backend.sh
 ```
+
+This installs only FastAPI and pytest into `.venv-backend-test/`. The heavier
+Diffusers environment is separate; see [Real TinySD runtime](#real-tinysd-runtime).
 
 For the real local model:
 
@@ -345,3 +353,13 @@ targets, and browser logs are intentionally ignored by Git.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+## Contributing and security
+
+Bug reports, regression results, documentation improvements, and compatible
+runtime adapters are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) before
+opening a pull request. For security-sensitive issues, see
+[SECURITY.md](SECURITY.md).
+
+Model weights and gated model repositories remain subject to their own model
+licenses and access terms; they are not relicensed by this repository.

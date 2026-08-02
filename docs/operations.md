@@ -55,10 +55,10 @@ The first request downloads and loads `segmind/tiny-sd` (about 1 GB) and can tak
 ## Verification
 
 ```bash
-python3 -m compileall -q backend
-.venv/bin/pytest backend/test_app.py
-npm test
+./scripts/test-backend.sh
+npm test -- --run
 npm run build
+python3 -m compileall -q backend scripts
 ```
 
 ## Real-runtime regression images
