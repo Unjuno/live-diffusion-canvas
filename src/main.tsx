@@ -1,7 +1,9 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
+const KonvaStroke = lazy(() => import("./KonvaStroke").then((module) => ({ default: module.KonvaStroke })));
 import "./styles.css";
+import "./audit-fixes.css";
 import "./real-model.css";
 import { makePreview } from "./runtime";
 import { clearSnapshots, loadSnapshots, persistSnapshot, type StoredSnapshot } from "./db";
@@ -18,6 +20,8 @@ type State = {
   errorMessage: string | null;
   guideInfluence: number;
   globalNoise: number;
+  explorationRewindFrames: number;
+  explorationNoiseSteps: number;
   temperature: number;
   localRejection: number;
   cfg: number;
@@ -40,6 +44,7 @@ type State = {
   runtimeDevice: string | null;
   runtimeDownloadStatus: string | null;
   snapshots: Snapshot[];
+  selectedSnapshotId: string | null;
   tick: number;
   diffusionStep: number;
   diffusionSteps: number;
@@ -88,6 +93,8 @@ const useApp = create<State>((set, get) => ({
   errorMessage: null,
   guideInfluence: 0.5,
   globalNoise: 0.04,
+  explorationRewindFrames: 2,
+  explorationNoiseSteps: 1,
   temperature: 0.7,
   localRejection: 0.7,
   cfg: 7.5,
@@ -110,6 +117,7 @@ const useApp = create<State>((set, get) => ({
   runtimeDevice: null,
   runtimeDownloadStatus: null,
   snapshots: [],
+  selectedSnapshotId: null,
   tick: 0,
   diffusionStep: 0,
   diffusionSteps: 0,
@@ -129,6 +137,7 @@ const useApp = create<State>((set, get) => ({
       generationPhase: "explore",
       errorMessage: null,
     });
+    void get().tickOnce();
   },
   pause: () => set({ loopStatus: "paused" }),
   resume: () => set({ loopStatus: "running" }),
@@ -184,6 +193,8 @@ const useApp = create<State>((set, get) => ({
             guideInfluence: s.guideInfluence,
             cfg: s.cfg,
             globalExplorationNoiseStrength: s.globalNoise,
+            explorationRewindFrames: s.explorationRewindFrames,
+            explorationNoiseSteps: s.explorationNoiseSteps,
             temperature: s.temperature,
             noiseBrushActive: s.noiseBrushActive,
             activeNoiseMask: s.activeNoiseMask.length
@@ -234,18 +245,31 @@ const useApp = create<State>((set, get) => ({
     }
     const snapshot = {
       id: crypto.randomUUID(),
+      parentId: s.snapshots.length ? s.snapshots[s.snapshots.length - 1].id : undefined,
       createdAt: Date.now(),
       generatedImage: s.generatedImage,
+      generatedImageDataUrl: s.generatedImage,
       prompt: s.prompt,
       note: `Explore update ${s.tick}`,
+      selectedBackend: s.backend,
+      selectedModel: s.model,
       importedImage: s.guideImage ?? undefined,
+      importedImageDataUrl: s.guideImage ?? undefined,
       humanDrawLayer: s.drawPoints,
+      humanDrawLayerDataUrl: JSON.stringify(s.drawPoints),
       guideEraseMask: s.guideEraseMask ?? undefined,
+      guideEraseMaskDataUrl: s.guideEraseMask ?? undefined,
       guideComposite: s.guideComposite ?? undefined,
+      guideCompositeDataUrl: s.guideComposite ?? undefined,
       lastNoiseMask: s.lastNoiseMask,
       diffusionStepCount: s.diffusionStepCount,
       seed: s.seed,
       cfg: s.cfg,
+      globalExplorationNoiseStrength: s.globalNoise,
+      explorationRewindFrames: s.explorationRewindFrames,
+      explorationNoiseSteps: s.explorationNoiseSteps,
+      localRejectionStrength: s.localRejection,
+      guideInfluence: s.guideInfluence,
       temperature: s.temperature,
       runtimeSnapshotId,
       runtimeSessionId: s.backend === "tinysd" ? s.runtimeSessionId ?? undefined : undefined,
@@ -255,7 +279,7 @@ const useApp = create<State>((set, get) => ({
   },
   restoreSnapshot: async (snapshot) => {
     const s = get();
-    let generatedImage = snapshot.generatedImage;
+    let generatedImage = snapshot.generatedImageDataUrl ?? snapshot.generatedImage;
     let diffusionStep = s.diffusionStep;
     let diffusionSteps = s.diffusionSteps;
     if (s.backend === "tinysd" && snapshot.runtimeSnapshotId && s.runtimeSessionId === snapshot.runtimeSessionId) {
@@ -270,15 +294,29 @@ const useApp = create<State>((set, get) => ({
     }
     set({
       generatedImage,
+      selectedSnapshotId: snapshot.id,
       prompt: snapshot.prompt,
+      backend: snapshot.selectedBackend ?? s.backend,
+      model: snapshot.selectedModel ?? s.model,
+      runtimeSessionId:
+        snapshot.selectedBackend && snapshot.selectedBackend !== s.backend
+          ? null
+          : snapshot.selectedModel && snapshot.selectedModel !== s.model
+            ? null
+            : s.runtimeSessionId,
       guideImage: snapshot.importedImage ?? null,
       drawPoints: snapshot.humanDrawLayer ?? [],
       guideEraseMask: snapshot.guideEraseMask ?? null,
-      guideErasePoints: snapshot.guideEraseMask ? JSON.parse(snapshot.guideEraseMask) : [],
+      guideErasePoints: parseGuideErasePoints(snapshot.guideEraseMask),
       guideComposite: snapshot.guideComposite ?? null,
       diffusionStepCount: snapshot.diffusionStepCount ?? s.diffusionStepCount,
       seed: snapshot.seed ?? s.seed,
       cfg: snapshot.cfg ?? s.cfg,
+      globalNoise: snapshot.globalExplorationNoiseStrength ?? s.globalNoise,
+      explorationRewindFrames: snapshot.explorationRewindFrames ?? s.explorationRewindFrames,
+      explorationNoiseSteps: snapshot.explorationNoiseSteps ?? s.explorationNoiseSteps,
+      localRejection: snapshot.localRejectionStrength ?? s.localRejection,
+      guideInfluence: snapshot.guideInfluence ?? s.guideInfluence,
       temperature: snapshot.temperature ?? s.temperature,
       diffusionStep,
       diffusionSteps,
@@ -293,15 +331,26 @@ const useApp = create<State>((set, get) => ({
       loopStatus: "paused",
       generationStatus: "generating",
       generationPhase: "finish",
+      selectedSnapshotId: snapshot.id,
+      generatedImage: snapshot.generatedImageDataUrl ?? snapshot.generatedImage,
     });
     const s = get();
+    const finishGuideInfluence = snapshot.guideInfluence ?? s.guideInfluence;
+    const finishLocalRejection = Math.min(snapshot.localRejectionStrength ?? s.localRejection, 0.2);
     if (s.backend === "mock") {
-      set({ generatedImage: makePreview(s.tick + 1, s.seed, false), generationStatus: "idle", prompt: snapshot.prompt, tick: s.tick + 1 });
+      set({ generatedImage: makePreview(s.tick + 1, s.seed, false, snapshot.generatedImageDataUrl ?? snapshot.generatedImage), generationStatus: "idle", generationPhase: "finish", selectedSnapshotId: snapshot.id, prompt: snapshot.prompt, tick: s.tick + 1 });
       return;
     }
     try {
-      const response = await runtimeJson<{previewImage:string; diffusionStep:number; diffusionSteps:number}>(`${RUNTIME_URL}/runtime/finish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: s.tick + 1, sessionId: s.runtimeSessionId, prompt: snapshot.prompt, guideComposite: snapshot.guideComposite, importedImage: snapshot.importedImage, guideEraseMask: snapshot.guideEraseMask, guideInfluence: s.guideInfluence, cfg: 5, globalExplorationNoiseStrength: 0, temperature: 0, noiseBrushActive: false, activeNoiseMask: null, localRejectionStrength: s.localRejection, updatesToAdvance: 1, phase: "finish", diffusionSteps: s.diffusionStepCount }) });
-      set({ generatedImage: response.previewImage, diffusionStep: response.diffusionStep, diffusionSteps: response.diffusionSteps, generationStatus: "idle", prompt: snapshot.prompt, tick: s.tick + 1, errorMessage: null });
+      if (s.backend === "tinysd" && snapshot.runtimeSnapshotId && s.runtimeSessionId === snapshot.runtimeSessionId) {
+        await runtimeJson<{previewImage:string; diffusionStep:number; diffusionSteps:number}>(`${RUNTIME_URL}/runtime/snapshot/restore`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: s.runtimeSessionId, snapshotId: snapshot.runtimeSnapshotId }),
+        });
+      }
+      const response = await runtimeJson<{previewImage:string; diffusionStep:number; diffusionSteps:number}>(`${RUNTIME_URL}/runtime/finish`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: s.tick + 1, sessionId: s.runtimeSessionId, prompt: snapshot.prompt, guideComposite: snapshot.guideComposite, importedImage: snapshot.importedImage, guideEraseMask: snapshot.guideEraseMask, guideInfluence: Math.min(Math.max(finishGuideInfluence, 0.3), 0.7), cfg: 5, globalExplorationNoiseStrength: 0, explorationRewindFrames: s.explorationRewindFrames, explorationNoiseSteps: s.explorationNoiseSteps, temperature: 0, noiseBrushActive: false, activeNoiseMask: null, localRejectionStrength: Math.max(finishLocalRejection, 0.05), updatesToAdvance: 12, phase: "finish", diffusionSteps: s.diffusionStepCount }) });
+      set({ generatedImage: response.previewImage, diffusionStep: response.diffusionStep, diffusionSteps: response.diffusionSteps, generationStatus: "idle", generationPhase: "finish", selectedSnapshotId: snapshot.id, prompt: snapshot.prompt, tick: s.tick + 1, errorMessage: null });
     } catch (error) {
       set({ generationStatus: "error", errorMessage: error instanceof Error ? error.message : "Finish failed" });
     }
@@ -358,9 +407,19 @@ function Slider({
     </label>
   );
 }
-function guideCompositeFor(points: [number, number][]) {
+function guideCompositeFor(
+  points: [number, number][],
+  importedImage?: string | null,
+  erasePoints: [number, number][] = [],
+) {
   const polyline = points.map((point) => point.join(",")).join(" ");
-  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#0b1525"/><polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
+  const image = importedImage
+    ?.replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;");
+  const eraseMask = erasePoints
+    .map(([x, y]) => `<circle cx="${x * 5.12}" cy="${y * 5.12}" r="20" fill="black"/>`)
+    .join("");
+  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><defs><mask id="guide-erase"><rect width="512" height="512" fill="white"/>${eraseMask}</mask></defs><rect width="512" height="512" fill="#0b1525"/>${image ? `<image href="${image}" x="0" y="0" width="512" height="512" preserveAspectRatio="none" mask="url(#guide-erase)"/>` : ""}<polyline points="${polyline}" fill="none" stroke="#ffc857" stroke-width="8" stroke-linecap="round"/></svg>`)}`;
 }
 
 function downloadGuideComposite(composite: string | null) {
@@ -369,6 +428,21 @@ function downloadGuideComposite(composite: string | null) {
   link.href = composite;
   link.download = "live-diffusion-guide.svg";
   link.click();
+}
+
+function parseGuideErasePoints(value: string | undefined): [number, number][] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (point): point is [number, number] =>
+        Array.isArray(point) && point.length >= 2 &&
+        typeof point[0] === "number" && typeof point[1] === "number",
+    );
+  } catch {
+    return [];
+  }
 }
 
 async function copyRuntimeSetupCommand() {
@@ -392,11 +466,11 @@ function Canvas({ guide = false }: { guide?: boolean }) {
       if (current.guideMode === "erase") {
         const erased = [...current.guideErasePoints, p];
         const visible = current.drawPoints.filter(([x, y]) => erased.every(([ex, ey]) => Math.hypot(x - ex, y - ey) > 8));
-        useApp.setState({ guideErasePoints: erased, guideEraseMask: JSON.stringify(erased), guideComposite: guideCompositeFor(visible) });
+        useApp.setState({ guideErasePoints: erased, guideEraseMask: JSON.stringify(erased), guideComposite: guideCompositeFor(visible, current.guideImage, erased) });
         return;
       }
       const points = [...current.drawPoints, p];
-      useApp.setState({ drawPoints: points, guideComposite: guideCompositeFor(points) });
+      useApp.setState({ drawPoints: points, guideComposite: guideCompositeFor(points, useApp.getState().guideImage, useApp.getState().guideErasePoints) });
     } else
       useApp.setState({
         activeNoiseMask: [...useApp.getState().activeNoiseMask, p],
@@ -434,6 +508,8 @@ function Canvas({ guide = false }: { guide?: boolean }) {
     <div
       ref={ref}
       className={`canvas ${guide ? "guide-canvas" : "generated-canvas"}`}
+      role="img"
+      aria-label={guide ? "Guide Canvas. Draw or erase a positive guide." : "Generated Image. Press and drag to reject a local solution."}
       onPointerDown={(e) => {
         setDrawing(true);
         try {
@@ -464,17 +540,9 @@ function Canvas({ guide = false }: { guide?: boolean }) {
         </svg>
       )}
       <div className="grid" />
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-        {points.length > 1 && (
-          <polyline
-            points={points.map((p) => p.join(",")).join(" ")}
-            fill="none"
-            stroke={guide ? "#ffc857" : "#ff6b6b"}
-            strokeWidth={guide ? "1.2" : String(Math.max(1.5, s.brushSize / 18))}
-            strokeLinecap="round"
-          />
-        )}
-      </svg>
+      <Suspense fallback={null}>
+        <KonvaStroke points={points} guide={guide} brushSize={s.brushSize} />
+      </Suspense>
       <div className="canvas-label">
         {guide ? "DRAW GUIDE" : "HOLD TO REJECT"}
       </div>
@@ -509,6 +577,7 @@ function App() {
       <section className="toolbar">
         <input
           name="prompt"
+          className="prompt-input"
           aria-label="Prompt"
           value={s.prompt}
           onChange={(e) => useApp.setState({ prompt: e.target.value })}
@@ -566,10 +635,10 @@ function App() {
             <div className="panel-head">
               <span>01 / GUIDE CANVAS</span>
               <div>
-                <button onClick={() => useApp.setState({ guideMode: "draw" })}>Draw</button>
-                <button onClick={() => useApp.setState({ guideMode: "erase" })}>Erase</button>
-                <button onClick={() => useApp.setState({ drawPoints: [], guideComposite: null })}>Clear draw</button>
-                <button onClick={() => { const current = useApp.getState(); useApp.setState({ guideErasePoints: [], guideEraseMask: null, guideComposite: guideCompositeFor(current.drawPoints) }); }}>Reset erase</button>
+                <button aria-pressed={s.guideMode === "draw"} onClick={() => useApp.setState({ guideMode: "draw" })}>Draw</button>
+                <button aria-pressed={s.guideMode === "erase"} onClick={() => useApp.setState({ guideMode: "erase" })}>Erase</button>
+                <button onClick={() => { const current = useApp.getState(); useApp.setState({ drawPoints: [], guideComposite: guideCompositeFor([], current.guideImage, current.guideErasePoints) }); }}>Clear draw</button>
+                <button onClick={() => { const current = useApp.getState(); useApp.setState({ guideErasePoints: [], guideEraseMask: null, guideComposite: guideCompositeFor(current.drawPoints, current.guideImage) }); }}>Reset erase</button>
                 <button onClick={() => downloadGuideComposite(s.guideComposite)} disabled={!s.guideComposite}>Export guide</button>
               </div>
             </div>
@@ -593,7 +662,7 @@ function App() {
                   }
                   const r = new FileReader();
                   r.onerror = () => useApp.setState({ generationStatus: "error", errorMessage: "Guide image could not be read." });
-                  r.onload = () => useApp.setState({ guideImage: String(r.result), guideComposite: s.drawPoints.length ? s.guideComposite : String(r.result), errorMessage: null, generationStatus: "idle" });
+                  r.onload = () => { const imported = String(r.result); const current = useApp.getState(); useApp.setState({ guideImage: imported, guideComposite: guideCompositeFor(current.drawPoints, imported, current.guideErasePoints), errorMessage: null, generationStatus: "idle" }); };
                   r.readAsDataURL(f);
                 }
               }}
@@ -639,6 +708,22 @@ function App() {
               max={0.1}
               step={0.01}
               onChange={(v) => useApp.setState({ globalNoise: v })}
+            />
+            <Slider
+              label="Rewind frames"
+              value={s.explorationRewindFrames}
+              min={1}
+              max={7}
+              step={1}
+              onChange={(v) => useApp.setState({ explorationRewindFrames: v })}
+            />
+            <Slider
+              label="Noise steps"
+              value={s.explorationNoiseSteps}
+              min={1}
+              max={4}
+              step={1}
+              onChange={(v) => useApp.setState({ explorationNoiseSteps: v })}
             />
             <Slider
               label="Temperature / variation"
@@ -705,7 +790,7 @@ function App() {
                   generationStatus: "error",
                   errorMessage: error instanceof Error ? error.message : "Snapshot save failed",
                 }))} disabled={!s.generatedImage || s.generationStatus === "generating"} title={!s.generatedImage ? "Generate an image before saving a snapshot" : "Save the current generated state"}>Save</button>
-                <button className="panel-action" onClick={() => void clearSnapshots().then(() => useApp.setState({ snapshots: [] }))} disabled={s.snapshots.length === 0}>Clear</button>
+                <button className="panel-action" onClick={() => void clearSnapshots().then(() => useApp.setState({ snapshots: [], selectedSnapshotId: null }))} disabled={s.snapshots.length === 0}>Clear</button>
               </div>
             </div>
           {(s.backend === "tinysd"
@@ -720,25 +805,35 @@ function App() {
                 ? s.snapshots.filter((x) => x.runtimeSessionId === s.runtimeSessionId)
                 : s.snapshots
               ).map((x, i) => (
-                <div className="snapshot" key={x.id}>
+                <div
+                  className={`snapshot ${s.selectedSnapshotId === x.id ? "selected" : ""}`}
+                  key={x.id}
+                  onClick={() => useApp.setState({ selectedSnapshotId: x.id })}
+                >
                   <img src={x.generatedImage} alt={`Snapshot ${String(i + 1).padStart(2, "0")}`} />
                   <div>
                     <b>Snapshot {String(i + 1).padStart(2, "0")}</b>
                     <small>{x.note}</small>
                   </div>
                   <button
-                    onClick={() => void useApp.getState().restoreSnapshot(x).catch((error) => useApp.setState({
+                    onClick={() => {
+                      useApp.setState({ selectedSnapshotId: x.id });
+                      void useApp.getState().restoreSnapshot(x).catch((error) => useApp.setState({
                       generationStatus: "error",
                       errorMessage: error instanceof Error ? error.message : "Restore failed",
-                    }))}
+                      }));
+                    }}
                   >
                     Restore
                   </button>
                   <button
-                    onClick={() => void useApp.getState().finish(x).catch((error) => useApp.setState({
+                    onClick={() => {
+                      useApp.setState({ selectedSnapshotId: x.id });
+                      void useApp.getState().finish(x).catch((error) => useApp.setState({
                       generationStatus: "error",
                       errorMessage: error instanceof Error ? error.message : "Finish failed",
-                    }))}
+                      }));
+                    }}
                     disabled={s.generationStatus === "generating"}
                   >
                     Finish

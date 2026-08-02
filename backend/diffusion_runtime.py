@@ -261,7 +261,7 @@ class TinySDRuntime:
         if hasattr(pipe.scheduler, "lower_order_nums"):
             pipe.scheduler.lower_order_nums = 0
 
-    def advance(self, state: DiffusionState, rejection_mask: list[list[float]] | None = None, rejection_strength: float = 0.0, exploration_strength: float = 0.04, temperature: float = 0.7, brush_size: int = 34) -> tuple[str, int, int]:
+    def advance(self, state: DiffusionState, rejection_mask: list[list[float]] | None = None, rejection_strength: float = 0.0, exploration_strength: float = 0.04, rewind_steps: int = 2, noise_steps: int = 1, temperature: float = 0.7, brush_size: int = 34) -> tuple[str, int, int]:
         started = time.perf_counter()
         with self._lock:
             pipe = self._pipeline()
@@ -285,11 +285,7 @@ class TinySDRuntime:
                     # high-noise initial timestep the user already explored.
                     exploration = min(max(float(exploration_strength), 0.0), 1.0)
                     state.exploration_cycle += 1
-                    restart_index = max(
-                        len(state.timesteps) - 2
-                        - round(exploration * max(len(state.timesteps) - 2, 0)),
-                        0,
-                    )
+                    restart_index = max(len(state.timesteps) - 1 - int(rewind_steps), 0)
                     renoised = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[restart_index].reshape(1))
                     alpha = min(float(rejection_strength), 1.0)
                     state.latents = state.latents * (1 - mask * alpha) + renoised * (mask * alpha)
@@ -297,11 +293,9 @@ class TinySDRuntime:
                     restart_noise = torch.randn_like(state.latents) * min(max(float(temperature), 0.0), 2.0)
                     exploration = min(max(float(exploration_strength), 0.0), 1.0)
                     state.exploration_cycle += 1
-                    restart_index = max(
-                        len(state.timesteps) - 2
-                        - round(exploration * max(len(state.timesteps) - 2, 0)),
-                        0,
-                    )
+                    restart_index = max(len(state.timesteps) - 1 - int(rewind_steps), 0)
+                    noise_scale = min(max(float(noise_steps), 1.0) ** 0.5, 3.0)
+                    restart_noise = restart_noise * noise_scale
                     renoised = pipe.scheduler.add_noise(state.latents, restart_noise, state.timesteps[restart_index].reshape(1))
                     if type(pipe.scheduler).__name__ == "DDIMScheduler":
                         state.latents = state.latents * (1 - exploration) + renoised * exploration

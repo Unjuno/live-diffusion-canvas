@@ -1,6 +1,7 @@
 node_modules/
 .venv/
 .venv-real/
+.venv-backend-test/
 __pycache__/
 src-tauri/target/
 dist/

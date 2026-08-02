@@ -170,6 +170,8 @@ type AppState = {
 
   cfg: number;
   globalExplorationNoiseStrength: number;
+  explorationRewindFrames: number;
+  explorationNoiseSteps: number;
   localRejectionStrength: number;
   guideInfluence: number;
   brushSize: number;
@@ -212,6 +214,8 @@ type Snapshot = {
   seed: number;
   cfg: number;
   globalExplorationNoiseStrength: number;
+  explorationRewindFrames: number;
+  explorationNoiseSteps: number;
   localRejectionStrength: number;
   guideInfluence: number;
 

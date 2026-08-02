@@ -1,5 +1,35 @@
 import Dexie, { type Table } from 'dexie';
-export type StoredSnapshot = { id:string; createdAt:number; generatedImage:string; prompt:string; note:string; importedImage?:string; humanDrawLayer?:[number,number][]; guideEraseMask?:string; guideComposite?:string; lastNoiseMask?:[number,number][]; diffusionStepCount?:number; seed?:number; cfg?:number; temperature?:number; runtimeSnapshotId?:string; runtimeSessionId?:string };
+export type StoredSnapshot = {
+  id:string;
+  parentId?:string;
+  createdAt:number;
+  generatedImage:string;
+  generatedImageDataUrl?:string;
+  prompt:string;
+  note:string;
+  selectedBackend?:string;
+  selectedModel?:string;
+  importedImage?:string;
+  importedImageDataUrl?:string;
+  humanDrawLayer?:[number,number][];
+  humanDrawLayerDataUrl?:string;
+  guideEraseMask?:string;
+  guideEraseMaskDataUrl?:string;
+  guideComposite?:string;
+  guideCompositeDataUrl?:string;
+  lastNoiseMask?:[number,number][];
+  diffusionStepCount?:number;
+  seed?:number;
+  cfg?:number;
+  globalExplorationNoiseStrength?:number;
+  explorationRewindFrames?:number;
+  explorationNoiseSteps?:number;
+  localRejectionStrength?:number;
+  guideInfluence?:number;
+  temperature?:number;
+  runtimeSnapshotId?:string;
+  runtimeSessionId?:string;
+};
 class SnapshotDatabase extends Dexie { snapshots!: Table<StoredSnapshot,string>; constructor(){super('live-diffusion-canvas');this.version(1).stores({snapshots:'id,createdAt'});} }
 export const snapshotDb = new SnapshotDatabase();
 export const loadSnapshots = () => snapshotDb.snapshots.orderBy('createdAt').toArray();

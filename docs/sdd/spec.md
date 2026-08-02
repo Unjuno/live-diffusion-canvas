@@ -213,6 +213,8 @@ v0.1 では以下を実装対象とする。
 - 基本生成設定
   - CFG / Guidance Scale
   - Global Exploration Noise Strength
+  - Exploration Rewind Frames
+  - Exploration Noise Steps
   - Local Rejection Strength
   - Guide Influence
   - Seed

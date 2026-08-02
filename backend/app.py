@@ -39,6 +39,8 @@ class Intervention(BaseModel):
     guideInfluence: float = Field(0.5, ge=0, le=1)
     cfg: float = Field(7.5, ge=1, le=20)
     globalExplorationNoiseStrength: float = Field(0.04, ge=0, le=1)
+    explorationRewindFrames: int = Field(2, ge=1, le=20)
+    explorationNoiseSteps: int = Field(1, ge=1, le=8)
     temperature: float = Field(0.7, ge=0, le=2)
     noiseBrushActive: bool = False
     activeNoiseMask: str | None = None
@@ -260,6 +262,8 @@ def intervention(request: Intervention) -> RuntimeResponse:
                     rejection_mask=rejection_mask,
                     rejection_strength=request.localRejectionStrength if request.noiseBrushActive else 0.0,
                     exploration_strength=request.globalExplorationNoiseStrength,
+                    rewind_steps=request.explorationRewindFrames,
+                    noise_steps=request.explorationNoiseSteps,
                     temperature=request.temperature,
                     brush_size=request.brushSize,
                 )

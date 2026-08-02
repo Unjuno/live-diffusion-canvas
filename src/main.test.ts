@@ -9,4 +9,9 @@ describe('Mock Stateful Runtime preview', () => {
   it('marks a rejected local solution in the preview', () => {
     expect(makePreview(1, 42, true)).toContain('f06b5d');
   });
+
+  it('keeps the snapshot image as the base for a finish preview', () => {
+    const base = 'data:image/svg+xml;base64,PHN2Zy8+';
+    expect(makePreview(2, 42, false, base)).toContain(encodeURIComponent(base));
+  });
 });
